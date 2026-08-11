@@ -3,8 +3,9 @@
 //! This deliberately does not construct the Viewer app. It owns only the Rerun
 //! state required to ingest component data and run one `SpatialView3D`: the
 //! recording store, one ephemeral blueprint, the view query, and camera/picking
-//! state. Hosts own their window, input session, surrounding UI, persistence,
-//! and product commands.
+//! state. The embedded stage begins with an orthographic z=0 plane but retains
+//! the same 3D view class for later spatial camera expansion. Hosts own their
+//! window, input session, surrounding UI, persistence, and product commands.
 
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ use re_viewer_context::{
     AppCaches, AppContext, AppOptions, ApplicationSelectionState, CommandReceiver, CommandSender,
     ComponentUiRegistry, DragAndDropManager, FallbackProviderRegistry, FocusTarget, ItemCollection,
     MissingChunkReporter, Route, StoreHub, ViewClass as _, ViewClassRegistry, ViewId, ViewStates,
-    ViewerContext, command_channel,
+    ViewerContext, ViewStateExt as _, command_channel,
 };
 use re_viewport::execute_systems_for_view;
 use re_viewport_blueprint::ViewBlueprint;
@@ -230,6 +231,10 @@ impl SpatialStage {
         let view_state =
             self.view_states
                 .get_mut_or_create(&self.recording_store_id, self.view.id, class);
+        view_state
+            .downcast_mut::<crate::SpatialViewState>()?
+            .state_3d
+            .embedded_planar = true;
         class.ui(
             &ctx,
             &missing_chunk_reporter,

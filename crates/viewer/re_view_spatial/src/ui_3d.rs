@@ -1,9 +1,11 @@
 use egui::emath::RectTransform;
 use egui::{Modifiers, NumExt as _};
 use glam::Vec3;
-use macaw::BoundingBox;
+use macaw::{BoundingBox, IsoTransform};
 use re_chunk_store::MissingChunkReporter;
-use re_renderer::view_builder::{Projection, TargetConfiguration, ViewBuilder};
+use re_renderer::view_builder::{
+    OrthographicCameraMode, Projection, TargetConfiguration, ViewBuilder,
+};
 use re_renderer::{LineDrawableBuilder, Size};
 use re_sdk_types::blueprint::archetypes::{
     Background, EyeControls3D, LineGrid3D, SpatialInformation,
@@ -36,6 +38,9 @@ use crate::visualizers::{Axes, CamerasVisualizerOutput, collect_ui_labels};
 pub struct View3DState {
     pub eye_state: EyeState,
 
+    /// Embedded stages use the composition's planar z=0 baseline without changing view class.
+    pub embedded_planar: bool,
+
     /// Last known view coordinates.
     /// Used to detect changes in view coordinates, in which case we reset the camera eye.
     pub scene_view_coordinates: Option<ViewCoordinates>,
@@ -48,6 +53,7 @@ impl Default for View3DState {
     fn default() -> Self {
         Self {
             eye_state: Default::default(),
+            embedded_planar: false,
             scene_view_coordinates: None,
             eye_interact_fade_in: false,
             eye_interact_fade_change_time: f64::NEG_INFINITY,
@@ -172,14 +178,22 @@ impl SpatialView3D {
             == Some(query.view_id);
         let enable_gamepad_navigation =
             ctx.app_options().experimental.gamepad_navigation && is_selected_view;
+        let embedded_planar = state_3d.embedded_planar;
 
-        let eye = state_3d.eye_state.update(
-            &view_context,
-            &response,
-            space_cameras,
-            &state.bounding_boxes,
-            enable_gamepad_navigation,
-        )?;
+        let eye = if embedded_planar {
+            Eye {
+                world_from_rub_view: IsoTransform::IDENTITY,
+                fov_y: None,
+            }
+        } else {
+            state_3d.eye_state.update(
+                &view_context,
+                &response,
+                space_cameras,
+                &state.bounding_boxes,
+                enable_gamepad_navigation,
+            )?
+        };
 
         state.state_3d = state_3d;
         state.show_bounding_box = show_bounding_box;
@@ -249,10 +263,18 @@ impl SpatialView3D {
             resolution_in_pixel,
 
             view_from_world: eye.world_from_rub_view.inverse(),
-            projection_from_view: Projection::Perspective {
-                vertical_fov: eye.fov_y.unwrap_or(Eye::DEFAULT_FOV_Y),
-                near_plane_distance: eye.near(),
-                aspect_ratio: resolution_in_pixel[0] as f32 / resolution_in_pixel[1] as f32,
+            projection_from_view: if embedded_planar {
+                Projection::Orthographic {
+                    camera_mode: OrthographicCameraMode::NearPlaneCenter,
+                    vertical_world_size: 1.0,
+                    far_plane_distance: eye.far(),
+                }
+            } else {
+                Projection::Perspective {
+                    vertical_fov: eye.fov_y.unwrap_or(Eye::DEFAULT_FOV_Y),
+                    near_plane_distance: eye.near(),
+                    aspect_ratio: resolution_in_pixel[0] as f32 / resolution_in_pixel[1] as f32,
+                }
             },
             viewport_transformation: re_renderer::RectTransform::IDENTITY,
 
