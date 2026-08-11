@@ -29,6 +29,9 @@ all-features = true
 [features]
 default = []
 
+## Enable helpers that require a native eframe window.
+native_window = ["dep:eframe", "dep:raw-window-handle"]
+
 ## Enable anonymized telemetry using our analytics SDK.
 analytics = ["dep:re_analytics"]
 
@@ -48,7 +51,7 @@ re_uri.workspace = true # for commands that act on a specific server
 
 ahash.workspace = true
 anyhow.workspace = true
-eframe = { workspace = true, default-features = false, features = ["wgpu"] }
+eframe = { workspace = true, default-features = false, features = ["wgpu"], optional = true }
 egui_commonmark = { workspace = true, features = ["pulldown_cmark"] }
 egui_extras.workspace = true
 egui.workspace = true
@@ -75,7 +78,7 @@ notify.workspace = true # Only used with the `hot_reload_design_tokens` feature
 
 # Mac-specific
 [target.'cfg(target_os = "macos")'.dependencies]
-raw-window-handle.workspace = true
+raw-window-handle = { workspace = true, optional = true }
 
 # Linux-specific
 [target.'cfg(target_os = "linux")'.dependencies]

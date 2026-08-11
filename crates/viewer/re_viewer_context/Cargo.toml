@@ -18,6 +18,7 @@ workspace = true
 [features]
 default = []
 testing = []
+tables = ["dep:datafusion"]
 
 [dependencies]
 re_lenses_core.workspace = true
@@ -58,7 +59,7 @@ bitflags.workspace = true
 bytemuck.workspace = true
 camino.workspace = true
 crossbeam.workspace = true
-datafusion.workspace = true
+datafusion = { workspace = true, optional = true }
 directories.workspace = true
 egui_tiles.workspace = true
 egui-wgpu.workspace = true

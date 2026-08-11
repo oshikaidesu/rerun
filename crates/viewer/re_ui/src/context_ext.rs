@@ -1,7 +1,9 @@
 use egui::emath::Float as _;
 use egui::{Align2, Mesh, Rect, Shape, Vec2, pos2};
 
-use crate::{DesignTokens, TopBarStyle};
+use crate::DesignTokens;
+#[cfg(feature = "native_window")]
+use crate::TopBarStyle;
 
 #[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
 struct TestMarker;
@@ -113,6 +115,7 @@ pub trait ContextExt {
         egui::RichText::new(text).color(style.visuals.error_fg_color)
     }
 
+    #[cfg(feature = "native_window")]
     fn top_bar_style(&self, _frame: &eframe::Frame, style_like_web: bool) -> TopBarStyle {
         let tokens = self.tokens();
         let egui_zoom_factor = self.ctx().zoom_factor();

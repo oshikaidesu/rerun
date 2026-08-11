@@ -117,6 +117,7 @@ impl ViewerContext<'_> {
     }
 
     /// All loaded tables.
+    #[cfg(feature = "tables")]
     pub fn table_stores(&self) -> &crate::TableStores {
         self.app_ctx.table_stores()
     }

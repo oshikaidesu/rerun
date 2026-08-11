@@ -1,4 +1,4 @@
-use eframe::emath::{NumExt as _, Vec2};
+use egui::{Vec2, emath::NumExt as _};
 use egui::{Frame, ModalResponse};
 
 use crate::context_ext::ContextExt as _;

@@ -1,6 +1,6 @@
 //! A single, in-memory Spatial 3D stage for embedders.
 //!
-//! This deliberately does not construct [`crate::App`]. It owns only the Rerun
+//! This deliberately does not construct the Viewer app. It owns only the Rerun
 //! state required to ingest component data and run one `SpatialView3D`: the
 //! recording store, one ephemeral blueprint, the view query, and camera/picking
 //! state. Hosts own their window, input session, surrounding UI, persistence,
@@ -55,7 +55,7 @@ impl SpatialStage {
         let mut component_fallback_registry =
             re_component_fallbacks::create_component_fallback_registry();
         let mut view_class_registry = ViewClassRegistry::default();
-        view_class_registry.add_class::<re_view_spatial::SpatialView3D>(
+        view_class_registry.add_class::<crate::SpatialView3D>(
             &reflection,
             &app_options,
             &mut component_fallback_registry,
@@ -100,7 +100,7 @@ impl SpatialStage {
             command_sender,
             command_receiver,
             view: ViewBlueprint::new_with_root_wildcard(
-                re_view_spatial::SpatialView3D::identifier(),
+                crate::SpatialView3D::identifier(),
             ),
             query_results: Default::default(),
         })

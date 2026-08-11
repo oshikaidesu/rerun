@@ -1,4 +1,4 @@
-use eframe::emath::{Align, Vec2};
+use egui::{Align, Vec2};
 use egui::{Layout, Response, Sense, Ui, UiBuilder, Widget};
 use smallvec::{SmallVec, smallvec};
 

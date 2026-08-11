@@ -1,8 +1,7 @@
 use crate::egui_ext::WidgetTextExt as _;
 use crate::egui_ext::boxed_widget::{BoxedWidget, BoxedWidgetExt as _};
 use crate::{DesignTokens, UiExt as _, icons};
-use eframe::emath::Align;
-use eframe::epaint::FontFamily;
+use egui::{Align, FontFamily};
 use egui::{
     Atom, AtomExt as _, AtomLayout, Atoms, Button, FontId, Frame, Id, Layout, Margin, Pos2, Rect,
     Response, Sense, TextStyle, Ui, UiBuilder, Vec2, Widget, WidgetText,

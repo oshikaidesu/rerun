@@ -1,5 +1,5 @@
 use crate::{ButtonVisuals, DesignTokens, UiExt as _};
-use eframe::emath::Vec2;
+use egui::Vec2;
 use egui::style::WidgetVisuals;
 use egui::{
     AtomLayoutResponse, Button, CornerRadius, IntoAtoms, NumExt as _, Rect, Response, Sense, Style,

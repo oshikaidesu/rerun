@@ -17,6 +17,7 @@ mod pinhole_wrapper;
 mod proc_mesh;
 mod scene_bounding_boxes;
 mod shared_fallbacks;
+mod spatial_stage;
 mod spatial_topology;
 mod ui;
 mod ui_2d;
@@ -36,6 +37,7 @@ use re_viewport_blueprint::{ViewProperty, ViewPropertyQueryError};
 pub use ui::SpatialViewState;
 pub use view_2d::SpatialView2D;
 pub use view_3d::SpatialView3D;
+pub use spatial_stage::SpatialStage;
 
 // Export some other types that are useful for extensions.
 pub use contexts::{EntityDepthOffsets, TransformTreeContext};
