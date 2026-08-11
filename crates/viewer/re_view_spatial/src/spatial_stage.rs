@@ -1,7 +1,7 @@
-//! A single, in-memory Spatial 2D stage for embedders.
+//! A single, in-memory Spatial 3D stage for embedders.
 //!
 //! This deliberately does not construct the Viewer app. It owns only the Rerun
-//! state required to ingest component data and run one `SpatialView2D`: the
+//! state required to ingest component data and run one `SpatialView3D`: the
 //! recording store, one ephemeral blueprint, the view query, and camera/picking
 //! state. Hosts own their window, input session, surrounding UI, persistence,
 //! and product commands.
@@ -22,7 +22,7 @@ use re_viewer_context::{
 use re_viewport::execute_systems_for_view;
 use re_viewport_blueprint::ViewBlueprint;
 
-/// Rerun's Spatial 2D runtime without the Viewer application's chrome or lifecycle.
+/// Rerun's Spatial 3D runtime without the Viewer application's chrome or lifecycle.
 pub struct SpatialStage {
     app_options: AppOptions,
     recording_store_id: StoreId,
@@ -46,7 +46,7 @@ pub struct SpatialStage {
 }
 
 impl SpatialStage {
-    /// Create an isolated in-memory Spatial 2D stage for one host application.
+    /// Create an isolated in-memory Spatial 3D stage for one host application.
     ///
     /// The stage never loads, saves, or mutates a user-facing Rerun blueprint.
     pub fn new(application_id: ApplicationId) -> anyhow::Result<Self> {
@@ -55,7 +55,7 @@ impl SpatialStage {
         let mut component_fallback_registry =
             re_component_fallbacks::create_component_fallback_registry();
         let mut view_class_registry = ViewClassRegistry::default();
-        view_class_registry.add_class::<crate::SpatialView2D>(
+        view_class_registry.add_class::<crate::SpatialView3D>(
             &reflection,
             &app_options,
             &mut component_fallback_registry,
@@ -100,7 +100,7 @@ impl SpatialStage {
             command_sender,
             command_receiver,
             view: ViewBlueprint::new_with_root_wildcard(
-                crate::SpatialView2D::identifier(),
+                crate::SpatialView3D::identifier(),
             ),
             query_results: Default::default(),
         })
@@ -117,7 +117,7 @@ impl SpatialStage {
         Ok(())
     }
 
-    /// Run exactly one Spatial 2D view inside the host-provided egui region.
+    /// Run exactly one Spatial 3D view inside the host-provided egui region.
     ///
     /// The caller supplies the Rerun render context attached to its own device,
     /// queue, surface, and input loop. No Viewer `App`, panels, navigation,
