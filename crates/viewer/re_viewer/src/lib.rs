@@ -44,6 +44,7 @@ mod open_url_description;
 mod prefetch_chunks;
 mod saving;
 mod screenshotter;
+pub mod spatial_stage;
 mod startup_options;
 mod texture_readback;
 mod ui;
@@ -77,6 +78,7 @@ pub use re_viewer_context::{
     AsyncRuntimeHandle, CommandReceiver, CommandSender, SystemCommand, SystemCommandSender,
     command_channel,
 };
+pub use spatial_stage::SpatialStage;
 pub use startup_options::{LoginOptions, StartupOptions};
 pub use ui::about_rerun_ui;
 pub(crate) use ui::dev_panel;

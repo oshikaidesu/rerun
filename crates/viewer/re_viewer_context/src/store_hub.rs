@@ -506,9 +506,9 @@ impl StoreHub {
 
     /// Add a chunk to a store and forward events to the store's [`StoreCache`] (if one exists).
     ///
-    /// This is the correct way to add data when a [`StoreCache`] may already exist,
-    /// e.g. in test harnesses that bypass the normal message channel.
-    pub fn add_chunk_for_tests(
+    /// This is the correct write route when a caller owns ingestion rather than using the
+    /// Viewer application's message channel.
+    pub fn add_chunk(
         &mut self,
         store_id: &StoreId,
         chunk: &std::sync::Arc<re_chunk::Chunk>,
@@ -529,6 +529,16 @@ impl StoreHub {
         }
 
         Ok(events)
+    }
+
+    /// Compatibility alias for callers that predate [`Self::add_chunk`].
+    #[deprecated = "use StoreHub::add_chunk"]
+    pub fn add_chunk_for_tests(
+        &mut self,
+        store_id: &StoreId,
+        chunk: &std::sync::Arc<re_chunk::Chunk>,
+    ) -> anyhow::Result<Vec<re_chunk_store::ChunkStoreEvent>> {
+        self.add_chunk(store_id, chunk)
     }
 
     /// Inserts a new table into the store (potentially overwriting an existing entry).
