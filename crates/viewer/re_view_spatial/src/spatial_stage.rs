@@ -3,8 +3,8 @@
 //! This deliberately does not construct the Viewer app. It owns only the Rerun
 //! state required to ingest component data and run one `SpatialView3D`: the
 //! recording store, one ephemeral blueprint, the view query, and camera/picking
-//! state. The embedded stage begins with an orthographic z=0 plane but retains
-//! the same 3D view class for later spatial camera expansion. Hosts own their
+//! state. The embedded stage keeps its composition plane at z=0 and starts with
+//! a front-facing perspective camera. Hosts own their
 //! window, input session, surrounding UI, persistence, and product commands.
 
 use std::sync::Arc;
