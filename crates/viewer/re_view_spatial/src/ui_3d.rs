@@ -39,6 +39,9 @@ pub struct View3DState {
     /// Embedded stages keep the composition baseline at z=0 without changing view class.
     pub embedded_planar: bool,
 
+    /// Distance along +Z for [`embedded_stage_eye`]. `None` keeps the default unit-height fit.
+    pub embedded_eye_distance: Option<f32>,
+
     /// Last known view coordinates.
     /// Used to detect changes in view coordinates, in which case we reset the camera eye.
     pub scene_view_coordinates: Option<ViewCoordinates>,
@@ -52,6 +55,7 @@ impl Default for View3DState {
         Self {
             eye_state: Default::default(),
             embedded_planar: false,
+            embedded_eye_distance: None,
             scene_view_coordinates: None,
             eye_interact_fade_in: false,
             eye_interact_fade_change_time: f64::NEG_INFINITY,
@@ -79,10 +83,14 @@ impl View3DState {
     }
 }
 
-fn embedded_stage_eye() -> Eye {
+pub(crate) fn default_embedded_eye_distance() -> f32 {
+    0.5 / (Eye::DEFAULT_FOV_Y * 0.5).tan()
+}
+
+fn embedded_stage_eye(distance: Option<f32>) -> Eye {
     let fov_y = Eye::DEFAULT_FOV_Y;
-    // z=0の正準平面が従来と同じ高さ1.0で収まる距離に置く。
-    let distance = 0.5 / (fov_y * 0.5).tan();
+    // z=0の正準平面。距離未指定なら高さ1.0が縦FOVに収まる。
+    let distance = distance.unwrap_or_else(default_embedded_eye_distance);
     Eye {
         world_from_rub_view: IsoTransform::from_translation(Vec3::Z * distance),
         fov_y: Some(fov_y),
@@ -189,7 +197,7 @@ impl SpatialView3D {
         let embedded_planar = state_3d.embedded_planar;
 
         let eye = if embedded_planar {
-            embedded_stage_eye()
+            embedded_stage_eye(state_3d.embedded_eye_distance)
         } else {
             state_3d.eye_state.update(
                 &view_context,

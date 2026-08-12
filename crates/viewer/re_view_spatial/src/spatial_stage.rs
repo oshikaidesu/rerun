@@ -48,6 +48,7 @@ pub struct SpatialStage {
     view: ViewBlueprint,
     query_results: HashMap<ViewId, re_viewer_context::DataQueryResult>,
     gpu_images: HashMap<EntityPath, GpuImage>,
+    embedded_eye_distance: Option<f32>,
 }
 
 struct GpuImage {
@@ -113,12 +114,35 @@ impl SpatialStage {
             view: ViewBlueprint::new_with_root_wildcard(crate::SpatialView3D::identifier()),
             query_results: Default::default(),
             gpu_images: Default::default(),
+            embedded_eye_distance: None,
         })
     }
 
     /// The recording store that receives this stage's Rerun component input.
     pub fn recording_store_id(&self) -> &StoreId {
         &self.recording_store_id
+    }
+
+    /// Default +Z distance that fits a z=0 rectangle of height 1.0 in the vertical FOV.
+    pub fn default_embedded_eye_distance() -> f32 {
+        crate::ui_3d::default_embedded_eye_distance()
+    }
+
+    /// Current embedded [`crate::eye::Eye`] distance. Unset uses [`Self::default_embedded_eye_distance`].
+    pub fn embedded_eye_distance(&self) -> f32 {
+        self.embedded_eye_distance
+            .unwrap_or_else(Self::default_embedded_eye_distance)
+    }
+
+    /// Vertical FOV of the embedded stage eye. Host gizmos should reuse this instead of inventing a camera.
+    pub fn embedded_eye_fov_y(&self) -> f32 {
+        crate::eye::Eye::DEFAULT_FOV_Y
+    }
+
+    /// Move the existing embedded eye along +Z. This does not create a second camera.
+    pub fn set_embedded_eye_distance(&mut self, distance: f32) {
+        let min = crate::eye::Eye::PERSPECTIVE_NEAR_PLANE * 2.0;
+        self.embedded_eye_distance = Some(distance.max(min));
     }
 
     /// Add a translated Rerun chunk to the stage's in-memory recording.
@@ -331,10 +355,11 @@ impl SpatialStage {
         let view_state =
             self.view_states
                 .get_mut_or_create(&self.recording_store_id, self.view.id, class);
-        view_state
+        let state_3d = &mut view_state
             .downcast_mut::<crate::SpatialViewState>()?
-            .state_3d
-            .embedded_planar = true;
+            .state_3d;
+        state_3d.embedded_planar = true;
+        state_3d.embedded_eye_distance = self.embedded_eye_distance;
         class.ui(
             &ctx,
             &missing_chunk_reporter,
@@ -357,5 +382,28 @@ impl SpatialStage {
             .on_frame_start(|item| Some(item.clone()), None);
         self.focused_item = None;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_embedded_eye_fits_unit_height() {
+        let distance = SpatialStage::default_embedded_eye_distance();
+        let half_fov = crate::eye::Eye::DEFAULT_FOV_Y * 0.5;
+        assert!((distance * half_fov.tan() - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn set_embedded_eye_distance_is_read_back() {
+        let mut stage = SpatialStage::new(ApplicationId::from("embedded-eye-distance"))
+            .expect("create spatial stage");
+        assert!((stage.embedded_eye_distance() - SpatialStage::default_embedded_eye_distance()).abs() < 1e-5);
+        stage.set_embedded_eye_distance(2.5);
+        assert!((stage.embedded_eye_distance() - 2.5).abs() < 1e-5);
+        stage.set_embedded_eye_distance(0.0);
+        assert!(stage.embedded_eye_distance() >= crate::eye::Eye::PERSPECTIVE_NEAR_PLANE * 2.0);
     }
 }
