@@ -28,7 +28,7 @@ use crate::{Annotations, ImageInfo, ImageStats};
 /// Returns a texture key for the given image.
 ///
 /// If the key changes, we upload a new texture.
-fn generate_texture_key(image: &ImageInfo) -> u64 {
+pub fn image_texture_key(image: &ImageInfo) -> u64 {
     // We need to include anything that, if changes, should result in a new texture being uploaded.
     let ImageInfo {
         buffer_content_hash,
@@ -79,7 +79,7 @@ fn color_image_to_gpu(
     re_tracing::profile_function!();
 
     let image_format = image.format;
-    let texture_key = generate_texture_key(image);
+    let texture_key = image_texture_key(image);
 
     let texture_handle = get_or_create_texture(render_ctx, texture_key, || {
         texture_creation_desc_from_color_image(render_ctx.device_caps(), image, debug_name)
@@ -145,7 +145,9 @@ fn color_image_to_gpu(
         ColorMapper::OffRGB
     };
 
-    let texture_alpha = if image_format.has_alpha() {
+    let texture_alpha = if render_ctx.texture_manager_2d.is_premultiplied(texture_key) {
+        TextureAlpha::AlreadyPremultiplied
+    } else if image_format.has_alpha() {
         // Assume that the texture has a separate (non-pre-multiplied) alpha.
         // TODO(wumpf): There should be a way to specify whether a texture uses pre-multiplied alpha or not.
         TextureAlpha::SeparateAlpha
@@ -430,7 +432,7 @@ fn depth_image_to_gpu(
     } = colormap_with_range
         .cloned()
         .unwrap_or_else(|| ColormapWithRange::default_for_depth_images(image_stats));
-    let texture_key = generate_texture_key(image);
+    let texture_key = image_texture_key(image);
     let texture = get_or_create_texture(render_ctx, texture_key, || {
         general_texture_creation_desc_from_image(debug_name, image, ColorModel::L, datatype)
     })
@@ -470,7 +472,7 @@ fn segmentation_image_to_gpu(
     let datatype = image.format.datatype();
 
     let colormap_key = hash(annotations.row_id());
-    let texture_key = generate_texture_key(image);
+    let texture_key = image_texture_key(image);
 
     let (_, mut max) = image_stats
         .range

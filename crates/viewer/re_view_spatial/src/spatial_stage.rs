@@ -10,15 +10,18 @@
 use std::sync::Arc;
 
 use ahash::HashMap;
-use re_chunk::{Chunk, LatestAtQuery};
+use re_chunk::{Chunk, LatestAtQuery, RowId};
 use re_entity_db::EntityDb;
 use re_log_channel::LogReceiverSet;
-use re_log_types::{ApplicationId, StoreId, StoreInfo, StoreKind, StoreSource};
+use re_log_types::{ApplicationId, EntityPath, StoreId, StoreInfo, StoreKind, StoreSource};
+use re_sdk_types::archetypes::{Image, Transform3D};
+use re_sdk_types::datatypes::{ChannelDatatype, ColorModel, ImageFormat};
+use re_sdk_types::image::ImageKind;
 use re_viewer_context::{
     AppCaches, AppContext, AppOptions, ApplicationSelectionState, CommandReceiver, CommandSender,
     ComponentUiRegistry, DragAndDropManager, FallbackProviderRegistry, FocusTarget, ItemCollection,
-    MissingChunkReporter, Route, StoreHub, ViewClass as _, ViewClassRegistry, ViewId, ViewStates,
-    ViewerContext, ViewStateExt as _, command_channel,
+    MissingChunkReporter, Route, StoreHub, ViewClass as _, ViewClassRegistry, ViewId,
+    ViewStateExt as _, ViewStates, ViewerContext, command_channel,
 };
 use re_viewport::execute_systems_for_view;
 use re_viewport_blueprint::ViewBlueprint;
@@ -44,6 +47,13 @@ pub struct SpatialStage {
     command_receiver: CommandReceiver,
     view: ViewBlueprint,
     query_results: HashMap<ViewId, re_viewer_context::DataQueryResult>,
+    gpu_images: HashMap<EntityPath, GpuImage>,
+}
+
+struct GpuImage {
+    width: u32,
+    height: u32,
+    texture_key: u64,
 }
 
 impl SpatialStage {
@@ -100,10 +110,9 @@ impl SpatialStage {
                 re_redap_client::ConnectionRegistry::new_without_stored_credentials(),
             command_sender,
             command_receiver,
-            view: ViewBlueprint::new_with_root_wildcard(
-                crate::SpatialView3D::identifier(),
-            ),
+            view: ViewBlueprint::new_with_root_wildcard(crate::SpatialView3D::identifier()),
             query_results: Default::default(),
+            gpu_images: Default::default(),
         })
     }
 
@@ -113,8 +122,78 @@ impl SpatialStage {
     }
 
     /// Add a translated Rerun chunk to the stage's in-memory recording.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "embedders normally hand ownership of freshly built chunks to the stage"
+    )]
     pub fn ingest_chunk(&mut self, chunk: Arc<Chunk>) -> anyhow::Result<()> {
         self.store_hub.add_chunk(&self.recording_store_id, &chunk)?;
+        Ok(())
+    }
+
+    /// Makes a GPU-resident premultiplied RGBA image available to Rerun's standard image visualizer.
+    ///
+    /// The image is represented in the recording store like any other [`Image`].
+    /// Only its pixel transfer is replaced with a GPU-to-GPU copy into the visualizer texture cache.
+    pub fn copy_gpu_image(
+        &mut self,
+        render_ctx: &re_renderer::RenderContext,
+        entity_path: impl Into<EntityPath>,
+        source: &re_renderer::external::wgpu::Texture,
+    ) -> anyhow::Result<()> {
+        let entity_path = entity_path.into();
+        let width = source.width();
+        let height = source.height();
+        anyhow::ensure!(source.format() == re_renderer::external::wgpu::TextureFormat::Rgba8Unorm);
+
+        let texture_key = if let Some(image) = self.gpu_images.get(&entity_path)
+            && image.width == width
+            && image.height == height
+        {
+            image.texture_key
+        } else {
+            let row_id = RowId::new();
+            let format = ImageFormat::from_color_model(
+                [width, height],
+                ColorModel::RGBA,
+                ChannelDatatype::U8,
+            );
+            let buffer = re_sdk_types::components::ImageBuffer::from(Vec::<u8>::new());
+            let image_info = re_viewer_context::ImageInfo::from_stored_blob(
+                row_id,
+                Image::descriptor_buffer().component,
+                buffer.0.clone(),
+                format,
+                ImageKind::Color,
+            );
+            let texture_key = re_viewer_context::gpu_bridge::image_texture_key(&image_info);
+            let image = Image::new(buffer, format);
+            let aspect = width as f32 / height as f32;
+            let transform = Transform3D::from_translation_scale(
+                [-0.5 * aspect, -0.5, 0.0],
+                [1.0 / height as f32, 1.0 / height as f32, 1.0],
+            );
+            let chunk = Chunk::builder(entity_path.clone())
+                .with_archetype(row_id, re_log_types::TimePoint::STATIC, &image)
+                .with_archetype(row_id, re_log_types::TimePoint::STATIC, &transform)
+                .build()?;
+            self.ingest_chunk(Arc::new(chunk))?;
+            self.gpu_images.insert(
+                entity_path,
+                GpuImage {
+                    width,
+                    height,
+                    texture_key,
+                },
+            );
+            texture_key
+        };
+
+        render_ctx.texture_manager_2d.copy_from_gpu_premultiplied(
+            texture_key,
+            render_ctx,
+            source,
+        )?;
         Ok(())
     }
 
@@ -244,6 +323,10 @@ impl SpatialStage {
             system_output,
         )?;
         drop(context_systems);
+        #[expect(
+            clippy::drop_non_drop,
+            reason = "end ViewerContext's mutable render-context borrow before submission"
+        )]
         drop(ctx);
         render_ctx.before_submit();
 

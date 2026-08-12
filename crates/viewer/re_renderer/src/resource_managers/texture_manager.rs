@@ -176,6 +176,9 @@ struct Inner {
     /// during [`Self::begin_frame`].
     texture_cache: HashMap<u64, GpuTexture2D>,
 
+    /// Textures supplied by an embedder whose RGB channels are already multiplied by alpha.
+    premultiplied_texture_keys: HashSet<u64>,
+
     accessed_textures: HashSet<u64>,
 }
 
@@ -184,11 +187,100 @@ impl Inner {
         // Drop any textures that weren't accessed in the last frame
         self.texture_cache
             .retain(|k, _| self.accessed_textures.contains(k));
+        self.premultiplied_texture_keys
+            .retain(|k| self.texture_cache.contains_key(k));
         self.accessed_textures.clear();
     }
 }
 
 impl TextureManager2D {
+    /// Copies an existing GPU-resident image into the texture cache used by image visualizers.
+    ///
+    /// This is intended for embedders which already rendered an image on the same device.
+    /// No pixels are read back to the CPU.
+    pub fn copy_from_gpu_premultiplied(
+        &self,
+        key: u64,
+        render_ctx: &RenderContext,
+        source: &wgpu::Texture,
+    ) -> Result<GpuTexture2D, ExternalGpuTextureError> {
+        if source.dimension() != wgpu::TextureDimension::D2 {
+            return Err(ExternalGpuTextureError::Not2D);
+        }
+
+        let size = source.size();
+        if size.width == 0 || size.height == 0 || size.depth_or_array_layers != 1 {
+            return Err(ExternalGpuTextureError::InvalidSize(size));
+        }
+
+        let mut inner = self.inner.lock();
+        let texture = match inner.texture_cache.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                let texture = entry.get();
+                if texture.width_height() != [size.width, size.height]
+                    || texture.format() != source.format()
+                {
+                    return Err(ExternalGpuTextureError::DescriptorMismatch);
+                }
+                texture.clone()
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let texture = render_ctx.gpu_resources.textures.alloc(
+                    &render_ctx.device,
+                    &TextureDesc {
+                        label: "external premultiplied image".into(),
+                        size,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: source.format(),
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::COPY_SRC,
+                    },
+                );
+                entry
+                    .insert(
+                        GpuTexture2D::new(texture, AlphaChannelUsage::AlphaChannelInUse)
+                            .expect("external image texture is 2D"),
+                    )
+                    .clone()
+            }
+        };
+
+        let mut encoder =
+            render_ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("copy external premultiplied image"),
+                });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: source,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture.texture.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            size,
+        );
+        render_ctx.queue.submit([encoder.finish()]);
+
+        inner.premultiplied_texture_keys.insert(key);
+        inner.accessed_textures.insert(key);
+        Ok(texture)
+    }
+
+    /// Whether the cached image identified by `key` already has premultiplied alpha.
+    pub fn is_premultiplied(&self, key: u64) -> bool {
+        self.inner.lock().premultiplied_texture_keys.contains(&key)
+    }
+
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -376,6 +468,16 @@ impl TextureManager2D {
     pub(crate) fn begin_frame(&self, _frame_index: u64) {
         self.inner.lock().begin_frame(_frame_index);
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ExternalGpuTextureError {
+    #[error("external GPU image must be a 2D texture")]
+    Not2D,
+    #[error("external GPU image has invalid size {0:?}")]
+    InvalidSize(wgpu::Extent3d),
+    #[error("external GPU image descriptor changed without changing its cache key")]
+    DescriptorMismatch,
 }
 
 /// Returns whether the given [`wgpu::TextureFormat`] has an alpha channel.
