@@ -14,7 +14,7 @@ use re_chunk::{Chunk, LatestAtQuery, RowId};
 use re_entity_db::EntityDb;
 use re_log_channel::LogReceiverSet;
 use re_log_types::{ApplicationId, EntityPath, StoreId, StoreInfo, StoreKind, StoreSource};
-use re_sdk_types::archetypes::{Image, Transform3D};
+use re_sdk_types::archetypes::{Clear, Image, Transform3D};
 use re_sdk_types::datatypes::{ChannelDatatype, ColorModel, ImageFormat};
 use re_sdk_types::image::ImageKind;
 use re_viewer_context::{
@@ -144,6 +144,10 @@ impl SpatialStage {
         let entity_path = entity_path.into();
         let width = source.width();
         let height = source.height();
+        anyhow::ensure!(
+            width > 0 && height > 0,
+            "GPU image dimensions must be non-zero"
+        );
         anyhow::ensure!(source.format() == re_renderer::external::wgpu::TextureFormat::Rgba8Unorm);
 
         let texture_key = if let Some(image) = self.gpu_images.get(&entity_path)
@@ -170,7 +174,7 @@ impl SpatialStage {
             let image = Image::new(buffer, format);
             let aspect = width as f32 / height as f32;
             let transform = Transform3D::from_translation_scale(
-                [-0.5 * aspect, -0.5, 0.0],
+                [-0.5 * aspect, -0.5, -0.01],
                 [1.0 / height as f32, 1.0 / height as f32, 1.0],
             );
             let chunk = Chunk::builder(entity_path.clone())
@@ -195,6 +199,23 @@ impl SpatialStage {
             source,
         )?;
         Ok(())
+    }
+
+    /// Remove a previously copied GPU image from this stage's recording.
+    pub fn clear_gpu_image(&mut self, entity_path: impl Into<EntityPath>) -> anyhow::Result<()> {
+        let entity_path = entity_path.into();
+        if self.gpu_images.remove(&entity_path).is_none() {
+            return Ok(());
+        }
+
+        let chunk = Chunk::builder(entity_path)
+            .with_archetype(
+                RowId::new(),
+                re_log_types::TimePoint::STATIC,
+                &Clear::flat(),
+            )
+            .build()?;
+        self.ingest_chunk(Arc::new(chunk))
     }
 
     /// Run exactly one Spatial 3D view inside the host-provided egui region.
