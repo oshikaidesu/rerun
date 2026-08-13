@@ -32,12 +32,13 @@ use re_sdk_types::blueprint::archetypes::Background;
 use re_sdk_types::blueprint::components::BackgroundKind;
 use re_sdk_types::components::Color;
 // ---
+pub use eye::Eye;
 use re_viewer_context::ViewContext;
 use re_viewport_blueprint::{ViewProperty, ViewPropertyQueryError};
+pub use spatial_stage::SpatialStage;
 pub use ui::SpatialViewState;
 pub use view_2d::SpatialView2D;
 pub use view_3d::SpatialView3D;
-pub use spatial_stage::SpatialStage;
 
 // Export some other types that are useful for extensions.
 pub use contexts::{EntityDepthOffsets, TransformTreeContext};

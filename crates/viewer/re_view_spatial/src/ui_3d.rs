@@ -1,7 +1,7 @@
 use egui::emath::RectTransform;
 use egui::{Modifiers, NumExt as _};
 use glam::Vec3;
-use macaw::{BoundingBox, IsoTransform};
+use macaw::BoundingBox;
 use re_chunk_store::MissingChunkReporter;
 use re_renderer::view_builder::{Projection, TargetConfiguration, ViewBuilder};
 use re_renderer::{LineDrawableBuilder, Size};
@@ -36,12 +36,6 @@ use crate::visualizers::{Axes, CamerasVisualizerOutput, collect_ui_labels};
 pub struct View3DState {
     pub eye_state: EyeState,
 
-    /// Embedded stages keep the composition baseline at z=0 without changing view class.
-    pub embedded_planar: bool,
-
-    /// Distance along +Z for [`embedded_stage_eye`]. `None` keeps the default unit-height fit.
-    pub embedded_eye_distance: Option<f32>,
-
     /// Last known view coordinates.
     /// Used to detect changes in view coordinates, in which case we reset the camera eye.
     pub scene_view_coordinates: Option<ViewCoordinates>,
@@ -54,8 +48,6 @@ impl Default for View3DState {
     fn default() -> Self {
         Self {
             eye_state: Default::default(),
-            embedded_planar: false,
-            embedded_eye_distance: None,
             scene_view_coordinates: None,
             eye_interact_fade_in: false,
             eye_interact_fade_change_time: f64::NEG_INFINITY,
@@ -80,20 +72,6 @@ impl View3DState {
             self.eye_state.start_interpolation();
         }
         self.scene_view_coordinates = scene_view_coordinates;
-    }
-}
-
-pub(crate) fn default_embedded_eye_distance() -> f32 {
-    0.5 / (Eye::DEFAULT_FOV_Y * 0.5).tan()
-}
-
-fn embedded_stage_eye(distance: Option<f32>) -> Eye {
-    let fov_y = Eye::DEFAULT_FOV_Y;
-    // z=0の正準平面。距離未指定なら高さ1.0が縦FOVに収まる。
-    let distance = distance.unwrap_or_else(default_embedded_eye_distance);
-    Eye {
-        world_from_rub_view: IsoTransform::from_translation(Vec3::Z * distance),
-        fov_y: Some(fov_y),
     }
 }
 
@@ -194,19 +172,14 @@ impl SpatialView3D {
             == Some(query.view_id);
         let enable_gamepad_navigation =
             ctx.app_options().experimental.gamepad_navigation && is_selected_view;
-        let embedded_planar = state_3d.embedded_planar;
 
-        let eye = if embedded_planar {
-            embedded_stage_eye(state_3d.embedded_eye_distance)
-        } else {
-            state_3d.eye_state.update(
-                &view_context,
-                &response,
-                space_cameras,
-                &state.bounding_boxes,
-                enable_gamepad_navigation,
-            )?
-        };
+        let eye = state_3d.eye_state.update(
+            &view_context,
+            &response,
+            space_cameras,
+            &state.bounding_boxes,
+            enable_gamepad_navigation,
+        )?;
 
         state.state_3d = state_3d;
         state.show_bounding_box = show_bounding_box;
