@@ -127,6 +127,27 @@ where
         state.all_resources[handle].clone()
     }
 
+    /// Registers a resource this pool did not create, so that it can be referred to by handle.
+    ///
+    /// Unlike [`Self::alloc`] this neither creates anything nor counts towards the pool's memory
+    /// statistics: the memory belongs to whoever handed the resource over. Reclamation still
+    /// applies once the pool is the only owner, so a borrowed resource must be kept alive by its
+    /// importer for as long as it may be sampled — see `TextureManager2D::import_gpu_premultiplied`.
+    pub fn insert(&self, inner: Res, desc: &Desc) -> Arc<DynamicResource<Handle, Desc, Res>> {
+        re_tracing::profile_function!();
+        let mut state = self.state.write();
+
+        let handle = state.all_resources.insert_with_key(|handle| {
+            Arc::new(DynamicResource {
+                inner,
+                creation_desc: desc.clone(),
+                handle,
+            })
+        });
+
+        state.all_resources[handle].clone()
+    }
+
     pub fn get_from_handle(
         &self,
         handle: Handle,
@@ -145,7 +166,13 @@ where
             })
     }
 
-    pub fn begin_frame(&mut self, frame_index: u64, mut on_destroy_resource: impl FnMut(&Res)) {
+    /// `on_destroy_resource` receives the handle as well, so that pools holding resources they do
+    /// not own (see [`Self::insert`]) can drop the bookkeeping without destroying the resource.
+    pub fn begin_frame(
+        &mut self,
+        frame_index: u64,
+        mut on_destroy_resource: impl FnMut(Handle, &Res),
+    ) {
         re_tracing::profile_function!();
         self.current_frame_index = frame_index;
         let state = self.state.get_mut();
@@ -172,7 +199,7 @@ where
                     continue;
                 };
                 update_stats(&desc);
-                on_destroy_resource(&removed_resource);
+                on_destroy_resource(resource, &removed_resource.inner);
             }
         }
 
@@ -193,7 +220,7 @@ where
                     true
                 } else {
                     update_stats(&resource.creation_desc);
-                    on_destroy_resource(&resource.inner);
+                    on_destroy_resource(resource.handle, &resource.inner);
                     false
                 }
             } else {

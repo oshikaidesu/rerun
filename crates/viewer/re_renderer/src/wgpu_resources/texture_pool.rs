@@ -1,4 +1,7 @@
+use std::collections::HashSet;
 use std::hash::Hash;
+
+use re_mutex::RwLock;
 
 use super::dynamic_resource_pool::{DynamicResource, DynamicResourcePool, DynamicResourcesDesc};
 use super::resource::PoolError;
@@ -102,6 +105,12 @@ impl DynamicResourcesDesc for TextureDesc {
 #[derive(Default)]
 pub struct GpuTexturePool {
     pool: DynamicResourcePool<GpuTextureHandle, TextureDesc, GpuTextureInternal>,
+
+    /// Handles registered via [`Self::import`], whose `wgpu::Texture` belongs to someone else.
+    ///
+    /// Reclamation drops these from the pool like any other resource, but must not call
+    /// `destroy()` on them: the embedder is still rendering into that texture.
+    imported: RwLock<HashSet<GpuTextureHandle>>,
 }
 
 impl GpuTexturePool {
@@ -130,8 +139,32 @@ impl GpuTexturePool {
 
     /// Called by `RenderContext` every frame. Updates statistics and may free unused textures.
     pub fn begin_frame(&mut self, frame_index: u64) {
-        self.pool
-            .begin_frame(frame_index, |res| res.texture.destroy());
+        let imported = &self.imported;
+        self.pool.begin_frame(frame_index, |handle, res| {
+            // An imported texture is only borrowed, so let go of it without destroying it.
+            if imported.write().remove(&handle) {
+                return;
+            }
+            res.texture.destroy();
+        });
+    }
+
+    /// Registers a texture owned by someone else, without allocating or copying.
+    ///
+    /// The returned [`GpuTexture`] carries a real handle, which is what bind group creation
+    /// resolves against, so an imported texture can be sampled like any pooled one. Dropping it is
+    /// safe: reclamation removes the pool's bookkeeping without destroying the foreign texture.
+    pub fn import(&self, texture: wgpu::Texture, desc: &TextureDesc) -> GpuTexture {
+        let default_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let imported = self.pool.insert(
+            GpuTextureInternal {
+                texture,
+                default_view,
+            },
+            desc,
+        );
+        self.imported.write().insert(imported.handle);
+        imported
     }
 
     /// Method to retrieve a resource from a weak handle (used by [`super::GpuBindGroupPool`])

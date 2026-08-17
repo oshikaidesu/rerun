@@ -71,7 +71,7 @@ impl GpuBufferPool {
 
     /// Called by `RenderContext` every frame. Updates statistics and may free unused buffers.
     pub fn begin_frame(&mut self, frame_index: u64) {
-        self.pool.begin_frame(frame_index, |res| res.destroy());
+        self.pool.begin_frame(frame_index, |_handle, res| res.destroy());
     }
 
     /// Method to retrieve a resource from a weak handle (used by [`super::GpuBindGroupPool`])

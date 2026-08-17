@@ -179,6 +179,12 @@ struct Inner {
     /// Textures supplied by an embedder whose RGB channels are already multiplied by alpha.
     premultiplied_texture_keys: HashSet<u64>,
 
+    /// Textures owned by an embedder and sampled in place, keyed like [`Self::texture_cache`].
+    ///
+    /// Held separately so that cache eviction never leaves the pool as sole owner: reclamation
+    /// destroys the underlying `wgpu::Texture`, which here belongs to the embedder.
+    imported_textures: HashMap<u64, GpuTexture2D>,
+
     accessed_textures: HashSet<u64>,
 }
 
@@ -189,11 +195,79 @@ impl Inner {
             .retain(|k, _| self.accessed_textures.contains(k));
         self.premultiplied_texture_keys
             .retain(|k| self.texture_cache.contains_key(k));
+        // Let go of imports the embedder stopped handing over. Safe to do implicitly: this only
+        // drops our reference, never the embedder's texture.
+        self.imported_textures
+            .retain(|k, _| self.texture_cache.contains_key(k));
         self.accessed_textures.clear();
     }
 }
 
 impl TextureManager2D {
+    /// Samples an existing GPU-resident image in place, without allocating or copying.
+    ///
+    /// The zero-copy counterpart to [`Self::copy_from_gpu_premultiplied`]. The embedder keeps
+    /// ownership of `source` and must not write to it while a frame that samples it is in flight,
+    /// which in practice means alternating between two textures per layer.
+    pub fn import_gpu_premultiplied(
+        &self,
+        key: u64,
+        render_ctx: &RenderContext,
+        source: &wgpu::Texture,
+    ) -> Result<GpuTexture2D, ExternalGpuTextureError> {
+        if source.dimension() != wgpu::TextureDimension::D2 {
+            return Err(ExternalGpuTextureError::Not2D);
+        }
+
+        let size = source.size();
+        if size.width == 0 || size.height == 0 || size.depth_or_array_layers != 1 {
+            return Err(ExternalGpuTextureError::InvalidSize(size));
+        }
+
+        let mut inner = self.inner.lock();
+
+        // Re-imported on every call rather than cached by `key`, because a double-buffered
+        // embedder alternates between two textures that share one key and one descriptor: there is
+        // nothing in a `wgpu::Texture` to tell them apart, so the only safe answer is to take
+        // whichever one was handed over now. Dropping the previous import is free (see
+        // `GpuTexturePool::import`); the cost of a repeat is one texture view.
+        let imported = render_ctx.gpu_resources.textures.import(
+            source.clone(),
+            &TextureDesc {
+                label: format!("imported premultiplied image {key:016x}").into(),
+                size,
+                mip_level_count: source.mip_level_count(),
+                sample_count: source.sample_count(),
+                dimension: wgpu::TextureDimension::D2,
+                format: source.format(),
+                usage: source.usage(),
+            },
+        );
+        let texture = GpuTexture2D::new(imported, AlphaChannelUsage::AlphaChannelInUse)
+            .expect("imported image texture is 2D");
+
+        inner.imported_textures.insert(key, texture.clone());
+        inner.texture_cache.insert(key, texture.clone());
+        inner.premultiplied_texture_keys.insert(key);
+        inner.accessed_textures.insert(key);
+
+        Ok(texture)
+    }
+
+    /// Stops sampling a texture previously handed over by [`Self::import_gpu_premultiplied`].
+    ///
+    /// Call this before the embedder drops its own texture. Returns whether there was one.
+    pub fn release_imported(&self, key: u64) -> bool {
+        let mut inner = self.inner.lock();
+        let released = inner.imported_textures.remove(&key).is_some();
+        if released {
+            inner.texture_cache.remove(&key);
+            inner.premultiplied_texture_keys.remove(&key);
+            inner.accessed_textures.remove(&key);
+        }
+        released
+    }
+
     /// Copies an existing GPU-resident image into the texture cache used by image visualizers.
     ///
     /// This is intended for embedders which already rendered an image on the same device.

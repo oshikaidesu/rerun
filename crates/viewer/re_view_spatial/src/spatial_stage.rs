@@ -13,7 +13,7 @@ use re_chunk::{Chunk, LatestAtQuery, RowId};
 use re_entity_db::EntityDb;
 use re_log_channel::LogReceiverSet;
 use re_log_types::{ApplicationId, EntityPath, StoreId, StoreInfo, StoreKind, StoreSource};
-use re_sdk_types::archetypes::{Clear, Image, Transform3D};
+use re_sdk_types::archetypes::{Clear, GridMap, Transform3D};
 use re_sdk_types::datatypes::{ChannelDatatype, ColorModel, ImageFormat};
 use re_sdk_types::image::ImageKind;
 use re_viewer_context::{
@@ -186,8 +186,14 @@ impl SpatialStage {
 
     /// Makes a GPU-resident premultiplied RGBA image available to Rerun's standard image visualizer.
     ///
-    /// The image is represented in the recording store like any other [`Image`].
+    /// The image is represented in the recording store like any other [`GridMap`].
     /// Only its pixel transfer is replaced with a GPU-to-GPU copy into the visualizer texture cache.
+    ///
+    /// [`GridMap`] rather than [`Image`] because only the former is drawn as a plane inside a
+    /// `SpatialView3D`. Going through the texture cache also means the upstream CPU upload path,
+    /// which still reports `AlphaChannelUsage::DontKnow` (rerun#12223), is never entered: the
+    /// entry this writes is already tagged as having an alpha channel, so a premultiplied host
+    /// frame composites per pixel instead of being flattened onto an opaque rectangle.
     pub fn copy_gpu_image(
         &mut self,
         render_ctx: &re_renderer::RenderContext,
@@ -218,18 +224,16 @@ impl SpatialStage {
             let buffer = re_sdk_types::components::ImageBuffer::from(Vec::<u8>::new());
             let image_info = re_viewer_context::ImageInfo::from_stored_blob(
                 row_id,
-                Image::descriptor_buffer().component,
+                GridMap::descriptor_data().component,
                 buffer.0.clone(),
                 format,
                 ImageKind::Color,
             );
             let texture_key = re_viewer_context::gpu_bridge::image_texture_key(&image_info);
-            let image = Image::new(buffer, format);
+            // `cell_size` carries the scale, so the transform only has to centre the plane.
+            let image = GridMap::new(buffer, format, 1.0 / height as f32);
             let aspect = width as f32 / height as f32;
-            let transform = Transform3D::from_translation_scale(
-                [-0.5 * aspect, -0.5, -0.01],
-                [1.0 / height as f32, 1.0 / height as f32, 1.0],
-            );
+            let transform = Transform3D::from_translation([-0.5 * aspect, -0.5, -0.01]);
             let chunk = Chunk::builder(entity_path.clone())
                 .with_archetype(row_id, re_log_types::TimePoint::STATIC, &image)
                 .with_archetype(row_id, re_log_types::TimePoint::STATIC, &transform)
@@ -246,7 +250,7 @@ impl SpatialStage {
             texture_key
         };
 
-        render_ctx.texture_manager_2d.copy_from_gpu_premultiplied(
+        render_ctx.texture_manager_2d.import_gpu_premultiplied(
             texture_key,
             render_ctx,
             source,
