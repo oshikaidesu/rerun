@@ -207,6 +207,12 @@ pub struct EyeState {
 
     pub last_eye: Option<Eye>,
 
+    /// Motolii seam: 埋め込み側が明示指定したカメラ。
+    ///
+    /// `Some` の間はブループリント由来のカメラより優先される。
+    /// 中身と変換は `crate::stage_camera` に閉じてある。
+    pub stage_camera: Option<crate::StageCamera>,
+
     /// The time this was last interacted with in egui time.
     ///
     /// None: Hasn't been interacted with yet.
@@ -1189,6 +1195,19 @@ impl EyeState {
         bounding_boxes: &SceneBoundingBoxes,
         enable_gamepad_navigation: bool,
     ) -> Result<Eye, ViewPropertyQueryError> {
+        // ── Motolii seam ここから ──
+        // 埋め込み側がカメラを置いていれば、それをそのまま採用する。
+        // 上流の血流(ブループリント読み出し・補間・入力処理)には触れず、
+        // 「読み側の1箇所で Option を見る」だけに留めてある。
+        // 取り消せば次のフレームから上流既定の挙動へ戻る。
+        if let Some(stage_camera) = self.stage_camera {
+            let eye = stage_camera.to_eye();
+            self.stop_interpolation();
+            self.last_eye = Some(eye);
+            return Ok(eye);
+        }
+        // ── Motolii seam ここまで ──
+
         let eye_property = ViewProperty::from_archetype::<EyeControls3D>(
             ctx.blueprint_db(),
             ctx.blueprint_query(),

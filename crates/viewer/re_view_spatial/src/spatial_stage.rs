@@ -25,6 +25,8 @@ use re_viewer_context::{
 use re_viewport::execute_systems_for_view;
 use re_viewport_blueprint::ViewBlueprint;
 
+use crate::StageCamera;
+
 /// Rerun's Spatial 3D runtime without the Viewer application's chrome or lifecycle.
 pub struct SpatialStage {
     app_options: AppOptions,
@@ -48,6 +50,8 @@ pub struct SpatialStage {
     query_results: HashMap<ViewId, re_viewer_context::DataQueryResult>,
     gpu_images: HashMap<EntityPath, GpuImage>,
     pending_selected_entity_path: Option<Option<String>>,
+    /// Motolii seam: 埋め込み側が置いたカメラ。毎フレーム view state へ渡す。
+    camera: Option<StageCamera>,
 }
 
 struct GpuImage {
@@ -114,6 +118,7 @@ impl SpatialStage {
             query_results: Default::default(),
             gpu_images: Default::default(),
             pending_selected_entity_path: None,
+            camera: None,
         })
     }
 
@@ -146,8 +151,41 @@ impl SpatialStage {
         self.focused_item = Some(entity_path.into().into());
     }
 
+    // ───────── Motolii seam: カメラの明示指定 ここから ─────────
+    //
+    // Rerun のカメラはブループリント (`EyeControls3D`) 由来だが、埋め込み側には
+    // そこへ書く口が無い(`SystemCommand::AppendToStore` を握り潰しているため。
+    // その件は別レーン)。ここは「値を持っておき、フレーム毎に view state の
+    // 欄へ渡す」だけの薄い口である。Rerun 内部型との接触は `stage_camera.rs`
+    // に閉じてあるので、上流が動いてもこのブロックは巻き込まれない。
+
+    /// Place this stage's view camera explicitly, in world coordinates.
+    ///
+    /// The camera stays where it is put until it is replaced or dropped with
+    /// [`Self::clear_camera`] / [`Self::reset_view`]. While it is set, Rerun's own
+    /// framing of the scene is not used.
+    pub fn set_camera(&mut self, camera: StageCamera) {
+        self.camera = Some(camera);
+    }
+
+    /// The camera previously placed by [`Self::set_camera`], if any.
+    pub fn camera(&self) -> Option<StageCamera> {
+        self.camera
+    }
+
+    /// Drop the explicit camera and let Rerun frame the scene again.
+    pub fn clear_camera(&mut self) {
+        self.camera = None;
+    }
+
+    // ───────── Motolii seam: カメラの明示指定 ここまで ─────────
+
     /// Reset the Rerun view camera on the next frame.
+    ///
+    /// This also drops any camera placed by [`Self::set_camera`], so the view goes
+    /// back to Rerun's own framing of the scene.
     pub fn reset_view(&mut self) {
+        self.camera = None;
         self.focused_item = Some(re_viewer_context::Item::View(self.view.id).into());
     }
 
@@ -390,6 +428,11 @@ impl SpatialStage {
         let view_state =
             self.view_states
                 .get_mut_or_create(&self.recording_store_id, self.view.id, class);
+        // Motolii seam: 描画直前に、埋め込み側のカメラを view state の欄へ渡す。
+        // 読む側は `EyeState::update` の1箇所だけ(`stage_camera.rs` 参照)。
+        if let Ok(spatial_state) = view_state.downcast_mut::<crate::SpatialViewState>() {
+            spatial_state.state_3d.eye_state.stage_camera = self.camera;
+        }
         class.ui(
             &ctx,
             &missing_chunk_reporter,
