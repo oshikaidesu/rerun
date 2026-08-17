@@ -317,7 +317,7 @@ mod tests {
         {
             let drop_counter_before = DROP_COUNTER.with(|c| c.get());
             let mut called_destroy = false;
-            pool.begin_frame(1, |_| called_destroy = true);
+            pool.begin_frame(1, |_, _| called_destroy = true);
 
             assert!(!called_destroy);
             assert_eq!(drop_counter_before, DROP_COUNTER.with(|c| c.get()),);
@@ -332,9 +332,9 @@ mod tests {
         {
             let drop_counter_before = DROP_COUNTER.with(|c| c.get());
             let mut called_destroy = false;
-            pool.begin_frame(2, |_| called_destroy = true);
+            pool.begin_frame(2, |_, _| called_destroy = true);
             assert!(!called_destroy);
-            pool.begin_frame(3, |_| called_destroy = true);
+            pool.begin_frame(3, |_, _| called_destroy = true);
             assert!(called_destroy);
             let drop_counter_now = DROP_COUNTER.with(|c| c.get());
             assert_eq!(
@@ -353,10 +353,10 @@ mod tests {
             drop(resource1);
 
             let mut called_destroy = false;
-            pool.begin_frame(4, |_| called_destroy = true);
+            pool.begin_frame(4, |_, _| called_destroy = true);
             assert!(!called_destroy);
             assert_eq!(drop_counter_before, DROP_COUNTER.with(|c| c.get()),);
-            pool.begin_frame(5, |_| called_destroy = true);
+            pool.begin_frame(5, |_, _| called_destroy = true);
             assert!(called_destroy);
             assert_eq!(drop_counter_before + 1, DROP_COUNTER.with(|c| c.get()),);
         }
@@ -369,7 +369,7 @@ mod tests {
         let res0 = pool.alloc(&ConcreteResourceDesc(0), |_| ConcreteResource);
         let res1 = pool.alloc(&ConcreteResourceDesc(0), |_| ConcreteResource);
         assert_ne!(res0.handle, res1.handle);
-        pool.begin_frame(1234, |_| {});
+        pool.begin_frame(1234, |_, _| {});
     }
 
     // A resource gets the same handle when re-used.
@@ -380,11 +380,11 @@ mod tests {
         let res0 = pool.alloc(&ConcreteResourceDesc(0), |_| ConcreteResource);
         let handle0 = res0.handle;
         drop(res0);
-        pool.begin_frame(1234, |_| {});
+        pool.begin_frame(1234, |_, _| {});
         let res1 = pool.alloc(&ConcreteResourceDesc(0), |_| ConcreteResource);
 
         assert_eq!(handle0, res1.handle);
-        pool.begin_frame(1235, |_| {});
+        pool.begin_frame(1235, |_, _| {});
     }
 
     fn allocate_resources(
