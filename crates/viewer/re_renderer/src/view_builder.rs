@@ -718,6 +718,21 @@ impl ViewBuilder {
         self.setup.resolution_in_pixel
     }
 
+    /// The resolved (non-MSAA) main target texture, in [`Self::MAIN_TARGET_COLOR_FORMAT`]
+    /// (sRGB-tagged).
+    ///
+    /// Motolii seam: [`Self::composite`] is the only other way to get this view's result out,
+    /// but it always writes through `composite.wgsl`'s unmultiply/gamma-encode/premultiply
+    /// step and into a render target format fixed by `RenderContext::output_format_color()`.
+    /// An embedder that wants to combine several views' output by blending them directly into
+    /// an sRGB-tagged destination (so the GPU's own sRGB decode/encode does the linear blend
+    /// math, matching what already happens once inside a single view's main target) has no way
+    /// to reach the still-linear-mixed content before that gamma round-trip. This accessor is
+    /// that read-only seat; it does not change what [`Self::draw`] or [`Self::composite`] do.
+    pub fn main_target(&self) -> &GpuTexture {
+        &self.setup.main_target_resolved
+    }
+
     pub fn queue_draw(
         &mut self,
         ctx: &RenderContext,
