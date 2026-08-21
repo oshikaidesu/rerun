@@ -271,6 +271,41 @@ impl DeviceCaps {
         Ok(caps)
     }
 
+    /// Picks device caps directly from an already-created [`wgpu::Device`], without requiring
+    /// the originating [`wgpu::Adapter`] to still be around.
+    ///
+    /// This exists for embedders that own the `Device`/`Queue` pair themselves and hand it down
+    /// to `re_renderer` (Motolii 裁定170 §2, BL1b-style second constructor) — the adapter may
+    /// already be gone by the time `re_renderer` gets involved.
+    ///
+    /// Unlike [`Self::from_adapter`] / [`Self::from_adapter_without_validation`], this cannot
+    /// call `wgpu::Adapter::get_downlevel_capabilities` (that's adapter-only API; `wgpu` 29.0.4's
+    /// `Device` exposes `features()`/`limits()`/`adapter_info()` but not downlevel caps). We
+    /// approximate the tier from the backend instead: only [`wgpu::Backend::Gl`] is downgraded to
+    /// [`DeviceCapabilityTier::Limited`] — GL is where the downlevel flags this tier requires are
+    /// actually known to be missing in practice (see the comment on
+    /// [`Self::required_downlevel_capabilities`]); every native backend (Vulkan/Metal/DX12) is
+    /// treated as [`DeviceCapabilityTier::FullWebGpuSupport`], satisfying the WebGPU min-spec.
+    ///
+    /// `max_texture_dimension2d`/`max_buffer_size` come from `device.limits()` rather than the
+    /// adapter's theoretical maximum — for a device that has already been created, its actual
+    /// negotiated limits are the correct source of truth.
+    pub fn from_device(device: &wgpu::Device) -> Self {
+        let tier = if device.adapter_info().backend == wgpu::Backend::Gl {
+            DeviceCapabilityTier::Limited
+        } else {
+            DeviceCapabilityTier::FullWebGpuSupport
+        };
+
+        let limits = device.limits();
+
+        Self {
+            tier,
+            max_texture_dimension2d: limits.max_texture_dimension_2d,
+            max_buffer_size: limits.max_buffer_size,
+        }
+    }
+
     /// Wgpu limits required by the given device tier.
     pub fn limits(&self) -> wgpu::Limits {
         wgpu::Limits {

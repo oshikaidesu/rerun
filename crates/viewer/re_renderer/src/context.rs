@@ -291,6 +291,54 @@ impl RenderContext {
         output_format_color: wgpu::TextureFormat,
         config_provider: impl FnOnce(&DeviceCaps) -> RenderConfig,
     ) -> Result<Self, RenderContextError> {
+        let device_caps = DeviceCaps::from_adapter(adapter)?;
+        let adapter_info = adapter.get_info();
+        Ok(Self::new_impl(
+            device_caps,
+            adapter_info,
+            device,
+            queue,
+            output_format_color,
+            config_provider,
+        ))
+    }
+
+    /// Sister constructor to [`Self::new`] for embedders that already own a [`wgpu::Device`]/
+    /// [`wgpu::Queue`] pair and no longer have (or never had) the originating [`wgpu::Adapter`]
+    /// at hand (Motolii 裁定170 §2, BL1b-style second constructor).
+    ///
+    /// Identical to [`Self::new`] except for how `device_caps`/`adapter_info` are derived:
+    /// `DeviceCaps::from_adapter(adapter)` becomes `DeviceCaps::from_device(&device)`, and
+    /// `adapter.get_info()` becomes `device.adapter_info()`. Everything after that point is the
+    /// shared [`Self::new_impl`] — `Self::new`'s behavior is unchanged byte-for-byte.
+    pub fn new_from_device(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        output_format_color: wgpu::TextureFormat,
+        config_provider: impl FnOnce(&DeviceCaps) -> RenderConfig,
+    ) -> Result<Self, RenderContextError> {
+        let device_caps = DeviceCaps::from_device(&device);
+        let adapter_info = device.adapter_info();
+        Ok(Self::new_impl(
+            device_caps,
+            adapter_info,
+            device,
+            queue,
+            output_format_color,
+            config_provider,
+        ))
+    }
+
+    /// Shared body of [`Self::new`] and [`Self::new_from_device`] — everything that doesn't need
+    /// to know whether `device_caps`/`adapter_info` came from an adapter or a device directly.
+    fn new_impl(
+        device_caps: DeviceCaps,
+        adapter_info: wgpu::AdapterInfo,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        output_format_color: wgpu::TextureFormat,
+        config_provider: impl FnOnce(&DeviceCaps) -> RenderConfig,
+    ) -> Self {
         re_tracing::profile_function!();
 
         #[cfg(not(load_shaders_from_disk))]
@@ -301,8 +349,6 @@ impl RenderContext {
             crate::workspace_shaders::init();
         }
 
-        let device_caps = DeviceCaps::from_adapter(adapter)?;
-        let adapter_info = adapter.get_info();
         let config = config_provider(&device_caps);
 
         let frame_index_for_uncaptured_errors = Arc::new(AtomicU64::new(STARTUP_FRAME_IDX));
@@ -339,7 +385,7 @@ impl RenderContext {
         };
 
         // Register shader workarounds for the current device.
-        if adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
+        if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
             // Chrome/Tint does not support `@invariant` when targeting Metal.
             // https://bugs.chromium.org/p/chromium/issues/detail?id=1439273
             // (bug is fixed as of writing, but hasn't hit any public released version yet)
@@ -360,7 +406,7 @@ impl RenderContext {
             Self::GPU_READBACK_BELT_DEFAULT_CHUNK_SIZE,
         ));
 
-        Ok(Self {
+        Self {
             device,
             queue,
             device_caps,
@@ -378,7 +424,7 @@ impl RenderContext {
             active_frame,
             frame_index_for_uncaptured_errors,
             gpu_resources,
-        })
+        }
     }
 
     fn poll_device(&mut self) {
