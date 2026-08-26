@@ -22,6 +22,15 @@ pub enum ViewBuilderError {
 
     #[error(transparent)]
     InvalidDebugOverlay(#[from] crate::renderer::DebugOverlayError),
+
+    #[error("external resolved format must be MAIN_TARGET_COLOR_FORMAT, got {got:?}")]
+    ExternalResolvedFormat { got: wgpu::TextureFormat },
+
+    #[error("external resolved size {got:?} must match config.resolution_in_pixel {expected:?}")]
+    ExternalResolvedSize { got: [u32; 2], expected: [u32; 2] },
+
+    #[error("external resolved texture must have RENDER_ATTACHMENT")]
+    ExternalResolvedUsage,
 }
 
 /// The highest level rendering block in `re_renderer`.
@@ -664,6 +673,265 @@ impl ViewBuilder {
             active_draw_phases |= DrawPhase::CompositingScreenshot;
             //}
 
+            active_draw_phases
+        };
+
+        let draw_phase_manager = DrawPhaseManager::new(active_draw_phases);
+
+        let setup = ViewTargetSetup {
+            name: config.name,
+            view_id,
+            camera_position: camera_position.into(),
+            bind_group_0,
+            main_target_msaa,
+            main_target_resolved,
+            depth_buffer,
+            resolution_in_pixel: config.resolution_in_pixel,
+        };
+
+        ctx.active_frame
+            .num_view_builders_created
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+        let mut view_builder = Self {
+            setup,
+            draw_phase_manager,
+            outline_mask_processor,
+            screenshot_processor: Default::default(),
+            picking_processor,
+        };
+
+        view_builder.queue_draw(
+            ctx,
+            CompositorDrawData::new(
+                ctx,
+                &view_builder.setup.main_target_resolved,
+                view_builder
+                    .outline_mask_processor
+                    .as_ref()
+                    .map(|p| p.final_voronoi_texture()),
+                config.outline_config.as_ref(),
+                config.blend_with_background,
+            ),
+        );
+
+        for debug_overlay in debug_overlays {
+            view_builder.queue_draw(ctx, debug_overlay);
+        }
+
+        Ok(view_builder)
+    }
+
+    /// Motolii presentable seam(裁定256). Does not change [`Self::new`].
+    pub fn new_with_external_resolved(
+        ctx: &RenderContext,
+        config: TargetConfiguration,
+        view_id: ViewBuilderId,
+        texture: &wgpu::Texture,
+    ) -> Result<Self, ViewBuilderError> {
+        re_tracing::profile_function!();
+
+        assert_ne!(config.resolution_in_pixel[0], 0);
+        assert_ne!(config.resolution_in_pixel[1], 0);
+
+        if texture.format() != Self::MAIN_TARGET_COLOR_FORMAT {
+            return Err(ViewBuilderError::ExternalResolvedFormat {
+                got: texture.format(),
+            });
+        }
+        let got = [texture.width(), texture.height()];
+        if got != config.resolution_in_pixel {
+            return Err(ViewBuilderError::ExternalResolvedSize {
+                got,
+                expected: config.resolution_in_pixel,
+            });
+        }
+        if !texture
+            .usage()
+            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        {
+            return Err(ViewBuilderError::ExternalResolvedUsage);
+        }
+
+        let render_cfg = ctx.render_config();
+        let msaa_enabled = render_cfg.msaa_mode != MsaaMode::Off;
+        let size = wgpu::Extent3d {
+            width: config.resolution_in_pixel[0],
+            height: config.resolution_in_pixel[1],
+            depth_or_array_layers: 1,
+        };
+
+        let main_target_resolved = ctx.gpu_resources.textures.import(
+            texture.clone(),
+            &TextureDesc {
+                label: format!("{:?} - external resolved", config.name).into(),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: Self::MAIN_TARGET_COLOR_FORMAT,
+                usage: texture.usage(),
+            },
+        );
+
+        let main_target_msaa = if msaa_enabled {
+            ctx.gpu_resources.textures.alloc(
+                &ctx.device,
+                &TextureDesc {
+                    label: format!("{:?} - main target", config.name).into(),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: render_cfg.msaa_mode.sample_count(),
+                    dimension: wgpu::TextureDimension::D2,
+                    format: Self::MAIN_TARGET_COLOR_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                },
+            )
+        } else {
+            main_target_resolved.clone()
+        };
+
+        let depth_buffer = ctx.gpu_resources.textures.alloc(
+            &ctx.device,
+            &TextureDesc {
+                label: format!("{:?} - depth buffer", config.name).into(),
+                size,
+                mip_level_count: 1,
+                sample_count: render_cfg.msaa_mode.sample_count(),
+                dimension: wgpu::TextureDimension::D2,
+                format: Self::MAIN_TARGET_DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            },
+        );
+
+        let projection_from_view = config
+            .projection_from_view
+            .projection_from_view(config.resolution_in_pixel);
+
+        let tan_half_fov = config.projection_from_view.tan_half_fov();
+
+        let resolution = glam::Vec2::new(
+            config.resolution_in_pixel[0] as f32,
+            config.resolution_in_pixel[1] as f32,
+        );
+        let pixel_world_size_from_camera_distance = match config.projection_from_view {
+            Projection::Perspective { .. } => tan_half_fov * 2.0 / resolution,
+            Projection::Orthographic {
+                vertical_world_size,
+                ..
+            } => {
+                glam::vec2(
+                    vertical_world_size * resolution.x / resolution.y,
+                    vertical_world_size,
+                ) / resolution
+            }
+        };
+
+        let ndc_scale_and_translation = config
+            .viewport_transformation
+            .to_ndc_scale_and_translation();
+        let projection_from_view = ndc_scale_and_translation * projection_from_view;
+        let pixel_world_size_from_camera_distance =
+            pixel_world_size_from_camera_distance * config.viewport_transformation.scale();
+        let pixel_world_size_from_camera_distance = pixel_world_size_from_camera_distance.x;
+
+        let mut view_from_world = config.view_from_world.to_mat4();
+        match config.projection_from_view {
+            Projection::Orthographic { camera_mode, .. } => match camera_mode {
+                OrthographicCameraMode::TopLeftCornerAndExtendZ => {
+                    *view_from_world.col_mut(2) = -view_from_world.col(2);
+                }
+                OrthographicCameraMode::NearPlaneCenter => {}
+            },
+            Projection::Perspective { .. } => {}
+        }
+
+        let camera_position = config.view_from_world.inverse().translation();
+        let camera_forward = -view_from_world.row(2).truncate();
+        let projection_from_world = projection_from_view * view_from_world;
+
+        let frame_uniform_buffer_content = FrameUniformBuffer {
+            view_from_world: glam::Affine3A::from_mat4(view_from_world).into(),
+            projection_from_view: projection_from_view.into(),
+            projection_from_world: projection_from_world.into(),
+            camera_position,
+            camera_forward,
+            pixel_world_size_from_camera_distance,
+            pixels_per_point: config.pixels_per_point,
+            tan_half_fov,
+            device_tier: ctx.device_caps().tier as u32,
+            deterministic_rendering: match config.render_mode {
+                RenderMode::Beautiful => 0,
+                RenderMode::Deterministic => 1,
+            },
+            framebuffer_resolution: glam::vec2(
+                config.resolution_in_pixel[0] as _,
+                config.resolution_in_pixel[1] as _,
+            )
+            .into(),
+        };
+        let frame_uniform_buffer = create_and_fill_uniform_buffer(
+            ctx,
+            format!("{:?} - frame uniform buffer", config.name).into(),
+            frame_uniform_buffer_content,
+        );
+
+        let bind_group_0 = ctx.global_bindings.create_bind_group(
+            &ctx.gpu_resources,
+            &ctx.device,
+            frame_uniform_buffer,
+        );
+
+        let mut debug_overlays: Vec<QueueableDrawData> = Vec::new();
+
+        let outline_mask_processor = config.outline_config.as_ref().map(|outline_config| {
+            OutlineMaskProcessor::new(
+                ctx,
+                outline_config,
+                &config.name,
+                config.resolution_in_pixel,
+            )
+        });
+        let picking_processor = if let Some(picking_config) = config.picking_config {
+            let picking_processor = PickingLayerProcessor::new(
+                ctx,
+                &config.name,
+                config.resolution_in_pixel.into(),
+                picking_config.picking_rect,
+                &frame_uniform_buffer_content,
+                picking_config.show_debug_view,
+                picking_config.readback_identifier,
+            );
+
+            if picking_config.show_debug_view {
+                debug_overlays.push(
+                    DebugOverlayDrawData::new(
+                        ctx,
+                        &picking_processor.picking_target,
+                        config.resolution_in_pixel.into(),
+                        picking_config.picking_rect,
+                    )?
+                    .into(),
+                );
+            }
+
+            Some(picking_processor)
+        } else {
+            None
+        };
+
+        let active_draw_phases = {
+            let mut active_draw_phases = DrawPhase::Opaque
+                | DrawPhase::Background
+                | DrawPhase::Transparent
+                | DrawPhase::Compositing;
+            if config.outline_config.is_some() {
+                active_draw_phases |= DrawPhase::OutlineMask | DrawPhase::OutlineMaskNoDepth;
+            }
+            if picking_processor.is_some() {
+                active_draw_phases |= DrawPhase::PickingLayer;
+            }
+            active_draw_phases |= DrawPhase::CompositingScreenshot;
             active_draw_phases
         };
 
