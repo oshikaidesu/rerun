@@ -114,9 +114,9 @@ pub use view_builder::{
 pub use wgpu_resources::{
     BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
     GpuPipelineLayoutPool, GpuRenderPipelineHandle, GpuRenderPipelinePool,
-    GpuRenderPipelinePoolAccessor, GpuShaderModuleHandle, GpuShaderModulePool, GpuTexture,
-    GpuTextureHandle, PipelineLayoutDesc, RenderPipelineDesc, ShaderModuleDesc, VertexBufferLayout,
-    WgpuResourcePoolStatistics,
+    GpuRenderPipelinePoolAccessor, GpuSamplerHandle, GpuSamplerPool, GpuShaderModuleHandle,
+    GpuShaderModulePool, GpuTexture, GpuTextureHandle, PipelineLayoutDesc, RenderPipelineDesc,
+    SamplerDesc, ShaderModuleDesc, VertexBufferLayout, WgpuResourcePoolStatistics,
 };
 
 pub use self::file_resolver::{
