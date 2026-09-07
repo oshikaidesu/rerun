@@ -266,6 +266,7 @@ impl PickingLayerProcessor {
             crate::global_bindings::EnvironmentBindings {
                 radiance: ctx.texture_manager_2d.zeroed_texture_float().handle,
                 irradiance: ctx.texture_manager_2d.zeroed_texture_float().handle,
+                specular: ctx.texture_manager_2d.zeroed_texture_float().handle,
             },
         );
 

@@ -98,6 +98,7 @@ impl CpuModel {
                     outline_mask_ids: Default::default(),
                     picking_layer_id: Default::default(),
                     cull_mode: Default::default(),
+                    surface: Default::default(),
                 })
             })
             .collect())

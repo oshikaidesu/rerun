@@ -73,6 +73,7 @@ pub struct GlobalBindings {
 pub struct EnvironmentBindings {
     pub radiance: GpuTextureHandle,
     pub irradiance: GpuTextureHandle,
+    pub specular: GpuTextureHandle,
 }
 
 impl GlobalBindings {
@@ -147,6 +148,17 @@ impl GlobalBindings {
                             binding: 6,
                             visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        // Environment specular atlas (equirectangular levels stacked vertically).
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 7,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
                             count: None,
                         },
                     ],
@@ -224,6 +236,7 @@ impl GlobalBindings {
                     BindGroupEntry::DefaultTextureView(environment.radiance),
                     BindGroupEntry::DefaultTextureView(environment.irradiance),
                     BindGroupEntry::Sampler(self.equirect_sampler),
+                    BindGroupEntry::DefaultTextureView(environment.specular),
                 ],
                 layout: self.layout,
             },

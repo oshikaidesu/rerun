@@ -51,6 +51,9 @@ mod gpu_data {
 
         pub picking_layer_id: [u32; 4],
 
+        /// roughness, metallic, transmission, index of refraction. See `MeshSurface`.
+        pub surface: [f32; 4],
+
         // Need only the first two bytes, but we want to keep everything aligned to at least 4 bytes.
         pub outline_mask_ids: [u8; 4],
     }
@@ -78,6 +81,8 @@ mod gpu_data {
                         // Picking id.
                         // Again this adds overhead for non-picking passes, more this time. Consider moving this elsewhere.
                         wgpu::VertexFormat::Uint32x4,
+                        // Surface (roughness, metallic, transmission, ior).
+                        wgpu::VertexFormat::Float32x4,
                         // Outline mask.
                         // This adds a tiny bit of overhead to all instances during non-outline pass, but the alternative is having yet another vertex buffer.
                         wgpu::VertexFormat::Uint8x2,
@@ -159,6 +164,29 @@ pub struct GpuMeshInstance {
     /// Controls face culling for this instance.
     /// `None` means no culling (show both faces), matching `wgpu::PrimitiveState::cull_mode`.
     pub cull_mode: Option<wgpu::Face>,
+
+    /// How the surface responds to the view's environment (`TargetConfiguration::environment`).
+    pub surface: MeshSurface,
+}
+
+/// Per-instance surface response to image-based lighting. The default is a matte dielectric,
+/// i.e. the look meshes had before environments existed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshSurface {
+    /// 0 = mirror, 1 = matte.
+    pub roughness: f32,
+    /// 0 = dielectric (reflection tinted white), 1 = metal (reflection tinted by albedo, no diffuse).
+    pub metallic: f32,
+    /// 0 = opaque, 1 = the environment shows through, refracted by `ior` and tinted by albedo.
+    pub transmission: f32,
+    /// Index of refraction; drives Fresnel and refraction. Glass ≈ 1.5.
+    pub ior: f32,
+}
+
+impl Default for MeshSurface {
+    fn default() -> Self {
+        Self { roughness: 1.0, metallic: 0.0, transmission: 0.0, ior: 1.5 }
+    }
 }
 
 impl GpuMeshInstance {
@@ -171,6 +199,7 @@ impl GpuMeshInstance {
             outline_mask_ids: OutlineMaskPreference::NONE,
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
+            surface: MeshSurface::default(),
         }
     }
 }
@@ -342,6 +371,12 @@ impl MeshDrawData {
                             .0
                             .map_or([0, 0, 0, 0], |mask| [mask[0], mask[1], 0, 0]),
                         picking_layer_id: instance.picking_layer_id.into(),
+                        surface: [
+                            instance.surface.roughness,
+                            instance.surface.metallic,
+                            instance.surface.transmission,
+                            instance.surface.ior,
+                        ],
                     })?;
 
                     // Transparent instances can not be batched.
@@ -891,6 +926,7 @@ mod tests {
             outline_mask_ids: OutlineMaskPreference::NONE,
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
+            surface: MeshSurface::default(),
         }
     }
 

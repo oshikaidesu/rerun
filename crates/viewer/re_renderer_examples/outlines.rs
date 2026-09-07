@@ -118,6 +118,7 @@ impl framework::Example for Outlines {
                         picking_layer_id: Default::default(),
                         additive_tint: Color32::BLACK,
                         cull_mode: None,
+                        surface: Default::default(),
                     })
             })
             .collect_vec();

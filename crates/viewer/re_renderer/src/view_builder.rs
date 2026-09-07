@@ -299,6 +299,7 @@ fn environment_bindings(
     crate::global_bindings::EnvironmentBindings {
         radiance: environment.map_or(zero, |e| e.radiance.handle()),
         irradiance: environment.map_or(zero, |e| e.irradiance.handle()),
+        specular: environment.map_or(zero, |e| e.specular.handle()),
     }
 }
 

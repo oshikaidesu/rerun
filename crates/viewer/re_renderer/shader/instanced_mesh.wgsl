@@ -41,6 +41,12 @@ struct VertexOut {
 
     @location(5) @interpolate(flat)
     picking_layer_id: vec4u,
+
+    @location(6)
+    world_position: vec3f,
+
+    @location(7) @interpolate(flat)
+    surface: vec4f, // roughness, metallic, transmission, ior
 };
 
 @vertex
@@ -66,6 +72,8 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
                                     in_instance.additive_tint_srgba.a);
     out.outline_mask_ids = in_instance.outline_mask_ids;
     out.picking_layer_id = in_instance.picking_layer_id;
+    out.world_position = world_position;
+    out.surface = in_instance.surface;
 
     return out;
 }
@@ -93,11 +101,14 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if all(in.normal_world_space == vec3f(0.0, 0.0, 0.0)) {
         // no normal, no shading
         return albedo;
-    } else {
-        let normal = normalize(in.normal_world_space);
-        let radiance = albedo.rgb * diffuse_shading(normal);
-        return vec4f(radiance, albedo.a);
     }
+    let view_dir = view_direction_to_camera(in.world_position);
+    var normal = normalize(in.normal_world_space);
+    if dot(normal, view_dir) < 0.0 {
+        normal = -normal; // two-sided
+    }
+    let radiance = shade_surface(albedo.rgb, normal, view_dir, in.surface);
+    return vec4f(radiance, albedo.a);
 }
 
 @fragment
