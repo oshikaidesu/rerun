@@ -112,7 +112,13 @@ fn write_variant(path: &std::path::Path, text: &str) -> anyhow::Result<()> {
 }
 
 impl MeshProgram {
-    pub fn new(ctx: &RenderContext, pipeline_layout: GpuPipelineLayoutHandle, desc: MeshProgramDesc) -> anyhow::Result<Self> {
+    /// A variant sharing the mesh renderer's bind group and pipeline layouts.
+    pub fn new(ctx: &RenderContext, desc: MeshProgramDesc) -> anyhow::Result<Self> {
+        let pipeline_layout = ctx.renderer::<super::mesh_renderer::MeshRenderer>().pipeline_layout;
+        Self::with_layout(ctx, pipeline_layout, desc)
+    }
+
+    pub(crate) fn with_layout(ctx: &RenderContext, pipeline_layout: GpuPipelineLayoutHandle, desc: MeshProgramDesc) -> anyhow::Result<Self> {
         re_tracing::profile_function!();
 
         let path = variant_path(&desc);

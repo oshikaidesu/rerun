@@ -449,7 +449,7 @@ impl MeshDrawData {
 pub struct MeshRenderer {
     default_program: Arc<MeshProgram>,
     pub bind_group_layout: GpuBindGroupLayoutHandle,
-    pub pipeline_layout: GpuPipelineLayoutHandle,
+    pub(crate) pipeline_layout: GpuPipelineLayoutHandle,
 }
 
 impl Renderer for MeshRenderer {
@@ -496,7 +496,7 @@ impl Renderer for MeshRenderer {
             },
         );
 
-        let default_program = MeshProgram::new(ctx, pipeline_layout, MeshProgramDesc { label: "default".into(), field: None, surface: None })
+        let default_program = MeshProgram::with_layout(ctx, pipeline_layout, MeshProgramDesc { label: "default".into(), field: None, surface: None })
             .expect("the default mesh program composes from embedded shaders");
 
         Self {
