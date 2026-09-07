@@ -31,6 +31,7 @@
 
 mod allocator;
 pub mod device_caps;
+pub mod environment;
 pub mod importer;
 pub mod mesh;
 pub mod renderer;
@@ -97,6 +98,7 @@ pub use resource_managers::AlphaChannelUsage;
 pub use texture_readback::{TextureReadback, poll_read_texture, schedule_read_texture};
 // Re-export used color types directly.
 pub use ecolor::{Color32, Hsva, Rgba};
+pub use environment::Environment;
 pub use global_bindings::GlobalBindings;
 pub use importer::{CpuModel, CpuModelMeshKey};
 pub use line_drawable_builder::{LineBatchBuilder, LineDrawableBuilder, LineStripBuilder};

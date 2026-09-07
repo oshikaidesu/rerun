@@ -32,7 +32,14 @@ struct FrameUniformBuffer {
     /// Screen resolution in pixels.
     framebuffer_resolution: vec2f,
 
-    _padding: vec2f,
+    /// Multiplier on the environment maps.
+    environment_strength: f32,
+
+    /// boolean (0/1): whether an environment is bound.
+    environment_present: u32,
+
+    /// Rotation applied to world directions before the equirectangular lookup.
+    environment_from_world: mat3x3f,
 };
 
 @group(0) @binding(0)
@@ -44,6 +51,12 @@ var nearest_sampler_repeat: sampler;
 var nearest_sampler_clamped: sampler;
 @group(0) @binding(3)
 var trilinear_sampler_repeat: sampler;
+@group(0) @binding(4)
+var environment_radiance: texture_2d<f32>;
+@group(0) @binding(5)
+var environment_irradiance: texture_2d<f32>;
+@group(0) @binding(6)
+var trilinear_sampler_clamped: sampler;
 
 // See config.rs#DeviceTier
 const DEVICE_TIER_GLES = 0u;

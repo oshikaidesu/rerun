@@ -285,6 +285,21 @@ pub struct TargetConfiguration {
     /// If this is `None`, no picking layer will be created.
     /// For details see [`ViewPickingConfiguration`].
     pub picking_config: Option<ViewPickingConfiguration>,
+
+    /// Image-based environment lighting the view's meshes. Draw [`crate::renderer::GenericSkyboxType::Environment`]
+    /// to also show it as the background.
+    pub environment: Option<crate::Environment>,
+}
+
+fn environment_bindings(
+    ctx: &RenderContext,
+    environment: Option<&crate::Environment>,
+) -> crate::global_bindings::EnvironmentBindings {
+    let zero = ctx.texture_manager_2d.zeroed_texture_float().handle;
+    crate::global_bindings::EnvironmentBindings {
+        radiance: environment.map_or(zero, |e| e.radiance.handle()),
+        irradiance: environment.map_or(zero, |e| e.irradiance.handle()),
+    }
 }
 
 impl Default for TargetConfiguration {
@@ -304,6 +319,7 @@ impl Default for TargetConfiguration {
             outline_config: None,
             blend_with_background: BlendWithBackground::No,
             picking_config: None,
+            environment: None,
         }
     }
 }
@@ -603,8 +619,15 @@ impl ViewBuilder {
             framebuffer_resolution: glam::vec2(
                 config.resolution_in_pixel[0] as _,
                 config.resolution_in_pixel[1] as _,
-            )
-            .into(),
+            ),
+            environment_strength: config.environment.as_ref().map_or(0.0, |e| e.strength),
+            environment_present: config.environment.is_some() as u32,
+            environment_from_world: config
+                .environment
+                .as_ref()
+                .map_or(glam::Mat3::IDENTITY, |e| e.environment_from_world)
+                .into(),
+            _end_padding: Default::default(),
         };
         let frame_uniform_buffer = create_and_fill_uniform_buffer(
             ctx,
@@ -616,6 +639,7 @@ impl ViewBuilder {
             &ctx.gpu_resources,
             &ctx.device,
             frame_uniform_buffer,
+            environment_bindings(ctx, config.environment.as_ref()),
         );
 
         let mut debug_overlays: Vec<QueueableDrawData> = Vec::new();
@@ -867,8 +891,15 @@ impl ViewBuilder {
             framebuffer_resolution: glam::vec2(
                 config.resolution_in_pixel[0] as _,
                 config.resolution_in_pixel[1] as _,
-            )
-            .into(),
+            ),
+            environment_strength: config.environment.as_ref().map_or(0.0, |e| e.strength),
+            environment_present: config.environment.is_some() as u32,
+            environment_from_world: config
+                .environment
+                .as_ref()
+                .map_or(glam::Mat3::IDENTITY, |e| e.environment_from_world)
+                .into(),
+            _end_padding: Default::default(),
         };
         let frame_uniform_buffer = create_and_fill_uniform_buffer(
             ctx,
@@ -880,6 +911,7 @@ impl ViewBuilder {
             &ctx.gpu_resources,
             &ctx.device,
             frame_uniform_buffer,
+            environment_bindings(ctx, config.environment.as_ref()),
         );
 
         let mut debug_overlays: Vec<QueueableDrawData> = Vec::new();

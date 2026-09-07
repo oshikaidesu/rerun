@@ -4,7 +4,7 @@ use smallvec::smallvec;
 use crate::wgpu_buffer_types;
 use crate::wgpu_resources::{
     BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
-    GpuSamplerHandle, SamplerDesc, WgpuResourcePools,
+    GpuSamplerHandle, GpuTextureHandle, SamplerDesc, WgpuResourcePools,
 };
 
 /// Mirrors the GPU contents of a frame-global uniform buffer.
@@ -45,7 +45,18 @@ pub struct FrameUniformBuffer {
     pub deterministic_rendering: u32,
 
     /// Screen resolution in pixels.
-    pub framebuffer_resolution: wgpu_buffer_types::Vec2RowPadded,
+    pub framebuffer_resolution: glam::Vec2,
+
+    /// Multiplier on the environment maps (bindings 4 & 5).
+    pub environment_strength: f32,
+
+    /// boolean (0/1): whether an environment is bound; otherwise lighting falls back to fixed lights.
+    pub environment_present: u32,
+
+    /// Rotation applied to world directions before the equirectangular lookup.
+    pub environment_from_world: wgpu_buffer_types::Mat3,
+
+    pub _end_padding: [wgpu_buffer_types::PaddingRow; 13],
 }
 
 /// Global bindings which are always available on bind group 0 for all [`crate::renderer::Renderer`].
@@ -54,6 +65,14 @@ pub struct GlobalBindings {
     nearest_neighbor_sampler_repeat: GpuSamplerHandle,
     nearest_neighbor_sampler_clamped: GpuSamplerHandle,
     trilinear_sampler_repeat: GpuSamplerHandle,
+    trilinear_sampler_clamped: GpuSamplerHandle,
+}
+
+/// Textures bound in group 0 for the environment (see [`crate::Environment`]).
+#[derive(Clone, Copy)]
+pub struct EnvironmentBindings {
+    pub radiance: GpuTextureHandle,
+    pub irradiance: GpuTextureHandle,
 }
 
 impl GlobalBindings {
@@ -101,6 +120,35 @@ impl GlobalBindings {
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
+                        // Environment radiance (equirectangular).
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // Environment irradiance (equirectangular, cosine convolved).
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 5,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // Trilinear sampler, clamped.
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 6,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
                     ],
                 },
             ),
@@ -137,6 +185,19 @@ impl GlobalBindings {
                     ..Default::default()
                 },
             ),
+            trilinear_sampler_clamped: pools.samplers.get_or_create(
+                device,
+                &SamplerDesc {
+                    label: "GlobalBindings::trilinear_sampler_clamped".into(),
+                    mag_filter: wgpu::FilterMode::Linear,
+                    min_filter: wgpu::FilterMode::Linear,
+                    mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                    address_mode_u: wgpu::AddressMode::ClampToEdge,
+                    address_mode_v: wgpu::AddressMode::ClampToEdge,
+                    address_mode_w: wgpu::AddressMode::ClampToEdge,
+                    ..Default::default()
+                },
+            ),
         }
     }
 
@@ -146,6 +207,7 @@ impl GlobalBindings {
         pools: &WgpuResourcePools,
         device: &wgpu::Device,
         frame_uniform_buffer_binding: BindGroupEntry,
+        environment: EnvironmentBindings,
     ) -> GpuBindGroup {
         pools.bind_groups.alloc(
             device,
@@ -158,6 +220,9 @@ impl GlobalBindings {
                     BindGroupEntry::Sampler(self.nearest_neighbor_sampler_repeat),
                     BindGroupEntry::Sampler(self.nearest_neighbor_sampler_clamped),
                     BindGroupEntry::Sampler(self.trilinear_sampler_repeat),
+                    BindGroupEntry::DefaultTextureView(environment.radiance),
+                    BindGroupEntry::DefaultTextureView(environment.irradiance),
+                    BindGroupEntry::Sampler(self.trilinear_sampler_clamped),
                 ],
                 layout: self.layout,
             },

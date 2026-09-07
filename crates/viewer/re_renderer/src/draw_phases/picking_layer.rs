@@ -263,6 +263,10 @@ impl PickingLayerProcessor {
             &ctx.gpu_resources,
             &ctx.device,
             frame_uniform_buffer,
+            crate::global_bindings::EnvironmentBindings {
+                radiance: ctx.texture_manager_2d.zeroed_texture_float().handle,
+                irradiance: ctx.texture_manager_2d.zeroed_texture_float().handle,
+            },
         );
 
         let row_info_id =

@@ -95,8 +95,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         return albedo;
     } else {
         let normal = normalize(in.normal_world_space);
-        let shading = simple_lighting(normal);
-        let radiance = albedo.rgb * shading;
+        let radiance = albedo.rgb * diffuse_shading(normal);
         return vec4f(radiance, albedo.a);
     }
 }
