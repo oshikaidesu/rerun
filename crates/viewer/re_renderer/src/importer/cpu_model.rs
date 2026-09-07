@@ -99,6 +99,7 @@ impl CpuModel {
                     picking_layer_id: Default::default(),
                     cull_mode: Default::default(),
                     surface: Default::default(),
+                    displace: Default::default(),
                 })
             })
             .collect())

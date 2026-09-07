@@ -32,6 +32,7 @@
 mod allocator;
 pub mod device_caps;
 pub mod environment;
+pub mod noise;
 pub mod importer;
 pub mod mesh;
 pub mod renderer;

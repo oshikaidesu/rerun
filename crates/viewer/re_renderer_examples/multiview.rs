@@ -50,6 +50,7 @@ fn build_mesh_instances(
                     picking_layer_id: Default::default(),
                     cull_mode: None,
                     surface: Default::default(),
+                    displace: Default::default(),
                 },
             )
         })

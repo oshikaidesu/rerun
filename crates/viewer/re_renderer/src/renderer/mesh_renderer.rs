@@ -54,6 +54,12 @@ mod gpu_data {
         /// roughness, metallic, transmission, index of refraction. See `MeshSurface`.
         pub surface: [f32; 4],
 
+        /// amount, size, evolution, complexity. See `MeshDisplace`.
+        pub displace: [f32; 4],
+
+        /// offset xyz, along (0 = normal, 1 = space). See `MeshDisplace`.
+        pub displace_offset: [f32; 4],
+
         // Need only the first two bytes, but we want to keep everything aligned to at least 4 bytes.
         pub outline_mask_ids: [u8; 4],
     }
@@ -82,6 +88,9 @@ mod gpu_data {
                         // Again this adds overhead for non-picking passes, more this time. Consider moving this elsewhere.
                         wgpu::VertexFormat::Uint32x4,
                         // Surface (roughness, metallic, transmission, ior).
+                        wgpu::VertexFormat::Float32x4,
+                        // Displacement field (amount, size, evolution, complexity) and (offset xyz, along).
+                        wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
                         // Outline mask.
                         // This adds a tiny bit of overhead to all instances during non-outline pass, but the alternative is having yet another vertex buffer.
@@ -167,6 +176,42 @@ pub struct GpuMeshInstance {
 
     /// How the surface responds to the view's environment (`TargetConfiguration::environment`).
     pub surface: MeshSurface,
+
+    /// Noise field that moves this instance's vertices (turbulent displace). Amount 0 leaves the mesh alone.
+    pub displace: MeshDisplace,
+}
+
+/// Which way a displacement field pushes vertices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DisplaceAlong {
+    /// Along the vertex normal by a scalar field; normals are bent by the field's gradient.
+    #[default]
+    Normal = 0,
+    /// By a vector field in the instance's frame.
+    Space = 1,
+}
+
+/// Fractal simplex noise displacement of a mesh's vertices, evaluated per vertex in the instance's
+/// own frame (rotation and scale of `world_from_mesh`, no translation), so the field travels with the mesh.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshDisplace {
+    /// Peak displacement in world units. 0 disables the field.
+    pub amount: f32,
+    /// Feature size in world units.
+    pub size: f32,
+    /// Number of noise octaves (1..=8).
+    pub complexity: u32,
+    /// Moves through the field; animate for turbulence.
+    pub evolution: f32,
+    /// Shifts the field in world units.
+    pub offset: glam::Vec3,
+    pub along: DisplaceAlong,
+}
+
+impl Default for MeshDisplace {
+    fn default() -> Self {
+        Self { amount: 0.0, size: 100.0, complexity: 3, evolution: 0.0, offset: glam::Vec3::ZERO, along: DisplaceAlong::Normal }
+    }
 }
 
 /// Per-instance surface response to image-based lighting. The default is a matte dielectric,
@@ -200,6 +245,7 @@ impl GpuMeshInstance {
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
             surface: MeshSurface::default(),
+            displace: MeshDisplace::default(),
         }
     }
 }
@@ -376,6 +422,18 @@ impl MeshDrawData {
                             instance.surface.metallic,
                             instance.surface.transmission,
                             instance.surface.ior,
+                        ],
+                        displace: [
+                            instance.displace.amount,
+                            instance.displace.size,
+                            instance.displace.evolution,
+                            instance.displace.complexity.clamp(1, 8) as f32,
+                        ],
+                        displace_offset: [
+                            instance.displace.offset.x,
+                            instance.displace.offset.y,
+                            instance.displace.offset.z,
+                            instance.displace.along as u32 as f32,
                         ],
                     })?;
 
@@ -927,6 +985,7 @@ mod tests {
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
             surface: MeshSurface::default(),
+            displace: Default::default(),
         }
     }
 

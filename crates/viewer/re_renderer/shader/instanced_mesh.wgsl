@@ -3,6 +3,7 @@
 #import <./mesh_vertex.wgsl>
 #import <./utils/srgb.wgsl>
 #import <./utils/lighting.wgsl>
+#import <./utils/noise.wgsl>
 
 @group(1) @binding(0)
 var albedo_texture: texture_2d<f32>;
@@ -49,18 +50,58 @@ struct VertexOut {
     surface: vec4f, // roughness, metallic, transmission, ior
 };
 
+/// Field coordinate for a point in the instance frame: shifted, scaled to feature size, moved by evolution.
+fn displace_coordinate(frame_position: vec3f, displace: vec4f, offset: vec4f) -> vec3f {
+    let size = max(displace.y, 1e-3);
+    return (frame_position + offset.xyz) / size + displace.z * vec3f(0.53, 0.71, 0.89);
+}
+
+/// Scalar field and its gradient (central differences) at a frame position.
+fn displace_scalar(q: vec3f, octaves: u32) -> f32 {
+    return fbm3(q, octaves);
+}
+
+fn displace_vector(q: vec3f, octaves: u32) -> vec3f {
+    return vec3f(fbm3(q, octaves), fbm3(q + vec3f(31.7, 0.0, 0.0), octaves), fbm3(q + vec3f(0.0, 47.3, 0.0), octaves));
+}
+
 @vertex
 fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
-    let world_position = vec3f(
-        dot(in_instance.world_from_mesh_row_0.xyz, in_vertex.position) + in_instance.world_from_mesh_row_0.w,
-        dot(in_instance.world_from_mesh_row_1.xyz, in_vertex.position) + in_instance.world_from_mesh_row_1.w,
-        dot(in_instance.world_from_mesh_row_2.xyz, in_vertex.position) + in_instance.world_from_mesh_row_2.w,
+    // Instance frame: rotation and scale of world_from_mesh, no translation. The field travels with the mesh.
+    let frame_position = vec3f(
+        dot(in_instance.world_from_mesh_row_0.xyz, in_vertex.position),
+        dot(in_instance.world_from_mesh_row_1.xyz, in_vertex.position),
+        dot(in_instance.world_from_mesh_row_2.xyz, in_vertex.position),
     );
-    let world_normal = vec3f(
+    let translation = vec3f(in_instance.world_from_mesh_row_0.w, in_instance.world_from_mesh_row_1.w, in_instance.world_from_mesh_row_2.w);
+    var world_normal = vec3f(
         dot(in_instance.world_from_mesh_normal_row_0.xyz, in_vertex.normal),
         dot(in_instance.world_from_mesh_normal_row_1.xyz, in_vertex.normal),
         dot(in_instance.world_from_mesh_normal_row_2.xyz, in_vertex.normal),
     );
+    var world_position = frame_position + translation;
+
+    let amount = in_instance.displace.x;
+    if amount != 0.0 {
+        let octaves = u32(clamp(in_instance.displace.w, 1.0, 8.0));
+        let q = displace_coordinate(frame_position, in_instance.displace, in_instance.displace_offset);
+        if in_instance.displace_offset.w < 0.5 && any(world_normal != vec3f(0.0)) {
+            let n = normalize(world_normal);
+            let h = displace_scalar(q, octaves);
+            world_position += n * amount * h;
+            // Bend the normal by the field's gradient (bump mapping): n' = n - amount * (∇h - n(n·∇h)) / size.
+            let e = 0.01;
+            let grad = vec3f(
+                displace_scalar(q + vec3f(e, 0.0, 0.0), octaves) - displace_scalar(q - vec3f(e, 0.0, 0.0), octaves),
+                displace_scalar(q + vec3f(0.0, e, 0.0), octaves) - displace_scalar(q - vec3f(0.0, e, 0.0), octaves),
+                displace_scalar(q + vec3f(0.0, 0.0, e), octaves) - displace_scalar(q - vec3f(0.0, 0.0, e), octaves),
+            ) / (2.0 * e * max(in_instance.displace.y, 1e-3));
+            let tangent_grad = grad - n * dot(n, grad);
+            world_normal = normalize(n - amount * tangent_grad);
+        } else {
+            world_position += amount * displace_vector(q, octaves);
+        }
+    }
 
     var out: VertexOut;
     out.position = frame.projection_from_world * vec4f(world_position, 1.0);

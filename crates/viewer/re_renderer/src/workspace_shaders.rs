@@ -188,6 +188,12 @@ pub fn init() {
     }
 
     {
+        let virtpath = Path::new("shader/utils/noise.wgsl");
+        let content = include_str!("../shader/utils/noise.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
         let virtpath = Path::new("shader/utils/plane.wgsl");
         let content = include_str!("../shader/utils/plane.wgsl").into();
         fs.create_file(virtpath, content).unwrap();

@@ -160,6 +160,7 @@ fn mesh_instances(
                 picking_layer_id: PickingLayerId::default(),
                 cull_mode: None,
                 surface: Default::default(),
+                displace: Default::default(),
             }
         })
         .collect();

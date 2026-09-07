@@ -119,6 +119,7 @@ impl framework::Example for Outlines {
                         additive_tint: Color32::BLACK,
                         cull_mode: None,
                         surface: Default::default(),
+                        displace: Default::default(),
                     })
             })
             .collect_vec();

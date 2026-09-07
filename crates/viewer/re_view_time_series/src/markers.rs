@@ -157,6 +157,7 @@ pub fn marker_instance(
         cull_mode: None,
     },
     surface: Default::default(),
+    displace: Default::default(),
 }
 
 /// Build a flat 2D unit-radius mesh for the given marker shape.
