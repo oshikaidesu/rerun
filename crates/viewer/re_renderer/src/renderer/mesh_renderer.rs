@@ -10,22 +10,19 @@ use std::sync::Arc;
 use enumset::EnumSet;
 use smallvec::smallvec;
 
+use super::mesh_program::{MeshProgram, MeshProgramDesc};
 use super::{DrawData, DrawError, RenderContext, Renderer};
-use crate::draw_phases::{DrawPhase, OutlineMaskProcessor};
+use crate::draw_phases::DrawPhase;
 use crate::mesh::gpu_data::MaterialUniformBuffer;
-use crate::mesh::{GpuMesh, mesh_vertices};
+use crate::mesh::GpuMesh;
 use crate::renderer::{DrawDataDrawable, DrawInstruction, DrawableCollectionViewInfo};
-use crate::view_builder::ViewBuilder;
 use crate::wgpu_resources::{
-    BindGroupLayoutDesc, BufferDesc, GpuBindGroupLayoutHandle, GpuBuffer, GpuRenderPipelineHandle,
-    GpuRenderPipelinePoolAccessor, PipelineLayoutDesc, RenderPipelineDesc,
+    BindGroupLayoutDesc, BufferDesc, GpuBindGroupLayoutHandle, GpuBuffer, GpuPipelineLayoutHandle,
+    GpuRenderPipelinePoolAccessor, PipelineLayoutDesc,
 };
-use crate::{
-    Color32, CpuWriteGpuReadError, DrawableCollector, OutlineMaskPreference, PickingLayerId,
-    PickingLayerProcessor, include_shader_module,
-};
+use crate::{Color32, CpuWriteGpuReadError, DrawableCollector, OutlineMaskPreference, PickingLayerId};
 
-mod gpu_data {
+pub(super) mod gpu_data {
     use ecolor::Color32;
 
     use crate::mesh::mesh_vertices;
@@ -51,14 +48,8 @@ mod gpu_data {
 
         pub picking_layer_id: [u32; 4],
 
-        /// roughness, metallic, transmission, index of refraction. See `MeshSurface`.
-        pub surface: [f32; 4],
-
-        /// amount, size, evolution, complexity. See `MeshDisplace`.
-        pub displace: [f32; 4],
-
-        /// offset xyz, along (0 = normal, 1 = space). See `MeshDisplace`.
-        pub displace_offset: [f32; 4],
+        /// 16 floats the program's hooks read. See `GpuMeshInstance::params`.
+        pub params: [[f32; 4]; 4],
 
         // Need only the first two bytes, but we want to keep everything aligned to at least 4 bytes.
         pub outline_mask_ids: [u8; 4],
@@ -87,9 +78,9 @@ mod gpu_data {
                         // Picking id.
                         // Again this adds overhead for non-picking passes, more this time. Consider moving this elsewhere.
                         wgpu::VertexFormat::Uint32x4,
-                        // Surface (roughness, metallic, transmission, ior).
+                        // Hook params (4 x vec4f).
                         wgpu::VertexFormat::Float32x4,
-                        // Displacement field (amount, size, evolution, complexity) and (offset xyz, along).
+                        wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
                         // Outline mask.
@@ -124,6 +115,9 @@ struct MeshBatch {
 
     /// Position of the batch in world space, used for distance sorting.
     position: glam::Vec3A,
+
+    /// Shader variant; `None` is the renderer's default.
+    program: Option<Arc<MeshProgram>>,
 }
 
 #[derive(Clone)]
@@ -174,64 +168,11 @@ pub struct GpuMeshInstance {
     /// `None` means no culling (show both faces), matching `wgpu::PrimitiveState::cull_mode`.
     pub cull_mode: Option<wgpu::Face>,
 
-    /// How the surface responds to the view's environment (`TargetConfiguration::environment`).
-    pub surface: MeshSurface,
+    /// Shader variant drawing this instance; `None` is the renderer's default (matte, no field).
+    pub program: Option<Arc<MeshProgram>>,
 
-    /// Noise field that moves this instance's vertices (turbulent displace). Amount 0 leaves the mesh alone.
-    pub displace: MeshDisplace,
-}
-
-/// Which way a displacement field pushes vertices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum DisplaceAlong {
-    /// Along the vertex normal by a scalar field; normals are bent by the field's gradient.
-    #[default]
-    Normal = 0,
-    /// By a vector field in the instance's frame.
-    Space = 1,
-}
-
-/// Fractal simplex noise displacement of a mesh's vertices, evaluated per vertex in the instance's
-/// own frame (rotation and scale of `world_from_mesh`, no translation), so the field travels with the mesh.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MeshDisplace {
-    /// Peak displacement in world units. 0 disables the field.
-    pub amount: f32,
-    /// Feature size in world units.
-    pub size: f32,
-    /// Number of noise octaves (1..=8).
-    pub complexity: u32,
-    /// Moves through the field; animate for turbulence.
-    pub evolution: f32,
-    /// Shifts the field in world units.
-    pub offset: glam::Vec3,
-    pub along: DisplaceAlong,
-}
-
-impl Default for MeshDisplace {
-    fn default() -> Self {
-        Self { amount: 0.0, size: 100.0, complexity: 3, evolution: 0.0, offset: glam::Vec3::ZERO, along: DisplaceAlong::Normal }
-    }
-}
-
-/// Per-instance surface response to image-based lighting. The default is a matte dielectric,
-/// i.e. the look meshes had before environments existed.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MeshSurface {
-    /// 0 = mirror, 1 = matte.
-    pub roughness: f32,
-    /// 0 = dielectric (reflection tinted white), 1 = metal (reflection tinted by albedo, no diffuse).
-    pub metallic: f32,
-    /// 0 = opaque, 1 = the environment shows through, refracted by `ior` and tinted by albedo.
-    pub transmission: f32,
-    /// Index of refraction; drives Fresnel and refraction. Glass ≈ 1.5.
-    pub ior: f32,
-}
-
-impl Default for MeshSurface {
-    fn default() -> Self {
-        Self { roughness: 1.0, metallic: 0.0, transmission: 0.0, ior: 1.5 }
-    }
+    /// 16 floats read by the program's hooks (`FieldIn::params` / `SurfaceIn::params`), in vec4 groups.
+    pub params: [f32; 16],
 }
 
 impl GpuMeshInstance {
@@ -244,8 +185,8 @@ impl GpuMeshInstance {
             outline_mask_ids: OutlineMaskPreference::NONE,
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
-            surface: MeshSurface::default(),
-            displace: MeshDisplace::default(),
+            program: None,
+            params: [0.0; 16],
         }
     }
 }
@@ -256,6 +197,7 @@ impl GpuMeshInstance {
 struct BatchKey {
     mesh_ptr: *const GpuMesh,
     cull_mode: Option<wgpu::Face>,
+    program_ptr: *const MeshProgram,
 }
 
 impl PartialOrd for BatchKey {
@@ -269,6 +211,7 @@ impl Ord for BatchKey {
         let Self {
             mesh_ptr,
             cull_mode,
+            program_ptr,
         } = self;
 
         fn face_to_u32(face: Option<wgpu::Face>) -> u32 {
@@ -284,6 +227,7 @@ impl Ord for BatchKey {
         mesh_ptr
             .cmp(&other.mesh_ptr)
             .then_with(|| face_to_u32(*cull_mode).cmp(&face_to_u32(other.cull_mode)))
+            .then_with(|| program_ptr.cmp(&other.program_ptr))
     }
 }
 
@@ -337,6 +281,7 @@ impl MeshDrawData {
                 .entry(BatchKey {
                     mesh_ptr: Arc::as_ptr(&instance.gpu_mesh),
                     cull_mode: instance.cull_mode,
+                    program_ptr: instance.program.as_ref().map_or(std::ptr::null(), Arc::as_ptr),
                 })
                 .or_insert_with(|| Vec::with_capacity(instances.len()))
                 .push((instance, EnumSet::<DrawPhase>::new())); // Draw phase is filled out later.
@@ -360,6 +305,7 @@ impl MeshDrawData {
                 };
                 let first_instance = first_instance.0;
                 let mesh = first_instance.gpu_mesh.clone();
+                let program = first_instance.program.clone();
                 let mesh_center = glam::Vec3A::from(mesh.bbox.center());
 
                 // TODO(andreas): precompute these two.
@@ -417,23 +363,11 @@ impl MeshDrawData {
                             .0
                             .map_or([0, 0, 0, 0], |mask| [mask[0], mask[1], 0, 0]),
                         picking_layer_id: instance.picking_layer_id.into(),
-                        surface: [
-                            instance.surface.roughness,
-                            instance.surface.metallic,
-                            instance.surface.transmission,
-                            instance.surface.ior,
-                        ],
-                        displace: [
-                            instance.displace.amount,
-                            instance.displace.size,
-                            instance.displace.evolution,
-                            instance.displace.complexity.clamp(1, 8) as f32,
-                        ],
-                        displace_offset: [
-                            instance.displace.offset.x,
-                            instance.displace.offset.y,
-                            instance.displace.offset.z,
-                            instance.displace.along as u32 as f32,
+                        params: [
+                            [instance.params[0], instance.params[1], instance.params[2], instance.params[3]],
+                            [instance.params[4], instance.params[5], instance.params[6], instance.params[7]],
+                            [instance.params[8], instance.params[9], instance.params[10], instance.params[11]],
+                            [instance.params[12], instance.params[13], instance.params[14], instance.params[15]],
                         ],
                     })?;
 
@@ -447,6 +381,7 @@ impl MeshDrawData {
                             has_transparent_tint: !instance.additive_tint.is_opaque(),
                             cull_mode: batch_key.cull_mode,
                             position: instance.world_from_mesh.transform_point3a(mesh_center),
+                            program: program.clone(),
                         });
                     }
                 }
@@ -470,6 +405,7 @@ impl MeshDrawData {
                                 cull_mode: batch_key.cull_mode,
                                 // Ordering isn't super important, so for many instances just pick the first as representative.
                                 position: chunk[0].0.world_from_mesh.transform_point3a(mesh_center),
+                                program: program.clone(),
                             });
                         }
 
@@ -490,6 +426,7 @@ impl MeshDrawData {
                     position: first_instance
                         .world_from_mesh
                         .transform_point3a(mesh_center),
+                    program: program.clone(),
                 });
 
                 num_processed_instances += instances.len() as u32;
@@ -510,22 +447,9 @@ impl MeshDrawData {
 }
 
 pub struct MeshRenderer {
-    rp_shaded: GpuRenderPipelineHandle,
-    rp_shaded_cull_back: GpuRenderPipelineHandle,
-    rp_shaded_cull_front: GpuRenderPipelineHandle,
-
-    rp_shaded_alpha_blended_cull_back: GpuRenderPipelineHandle,
-    rp_shaded_alpha_blended_cull_front: GpuRenderPipelineHandle,
-
-    rp_picking_layer: GpuRenderPipelineHandle,
-    rp_picking_layer_cull_back: GpuRenderPipelineHandle,
-    rp_picking_layer_cull_front: GpuRenderPipelineHandle,
-
-    rp_outline_mask: GpuRenderPipelineHandle,
-    rp_outline_mask_cull_back: GpuRenderPipelineHandle,
-    rp_outline_mask_cull_front: GpuRenderPipelineHandle,
-
+    default_program: Arc<MeshProgram>,
     pub bind_group_layout: GpuBindGroupLayoutHandle,
+    pub pipeline_layout: GpuPipelineLayoutHandle,
 }
 
 impl Renderer for MeshRenderer {
@@ -533,8 +457,6 @@ impl Renderer for MeshRenderer {
 
     fn create_renderer(ctx: &RenderContext) -> Self {
         re_tracing::profile_function!();
-
-        let render_pipelines = &ctx.gpu_resources.render_pipelines;
 
         let bind_group_layout = ctx.gpu_resources.bind_group_layouts.get_or_create(
             &ctx.device,
@@ -574,168 +496,13 @@ impl Renderer for MeshRenderer {
             },
         );
 
-        let shader_module = ctx.gpu_resources.shader_modules.get_or_create(
-            ctx,
-            &include_shader_module!("../../shader/instanced_mesh.wgsl"),
-        );
-
-        // We always assume counter-clockwise faces as front.
-        let front_face = wgpu::FrontFace::Ccw;
-
-        let primitive = wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            cull_mode: None,
-            front_face,
-            ..Default::default()
-        };
-        // Put instance vertex buffer on slot 0 since it doesn't change for several draws.
-        let vertex_buffers: smallvec::SmallVec<[_; 4]> = std::iter::chain(
-            std::iter::once(gpu_data::InstanceData::vertex_buffer_layout()),
-            mesh_vertices::vertex_buffer_layouts(),
-        )
-        .collect();
-
-        let rp_shaded_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_shaded".into(),
-            pipeline_layout,
-            vertex_entrypoint: "vs_main".into(),
-            vertex_handle: shader_module,
-            fragment_entrypoint: "fs_main_shaded".into(),
-            fragment_handle: shader_module,
-            vertex_buffers,
-            render_targets: smallvec![Some(ViewBuilder::MAIN_TARGET_COLOR_FORMAT.into())],
-            primitive,
-            depth_stencil: Some(ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE),
-            multisample: ViewBuilder::main_target_default_msaa_state(ctx.render_config(), false),
-        };
-        let rp_shaded = render_pipelines.get_or_create(ctx, &rp_shaded_desc);
-        let rp_shaded_cull_back = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_shaded_cull_back".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..primitive
-                },
-                ..rp_shaded_desc.clone()
-            },
-        );
-        let rp_shaded_cull_front = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_shaded_cull_front".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Front),
-                    ..primitive
-                },
-                ..rp_shaded_desc.clone()
-            },
-        );
-
-        let rp_shaded_alpha_blended_cull_back_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_shaded_alpha_blended_front".into(),
-            render_targets: smallvec![Some(wgpu::ColorTargetState {
-                format: ViewBuilder::MAIN_TARGET_COLOR_FORMAT,
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            depth_stencil: Some(ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE_NO_WRITE),
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Back),
-                ..primitive
-            },
-            ..rp_shaded_desc.clone()
-        };
-        let rp_shaded_alpha_blended_cull_front_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_shaded_alpha_blended_back".into(),
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Front),
-                ..primitive
-            },
-            ..rp_shaded_alpha_blended_cull_back_desc.clone()
-        };
-        let rp_shaded_alpha_blended_cull_back =
-            render_pipelines.get_or_create(ctx, &rp_shaded_alpha_blended_cull_back_desc);
-        let rp_shaded_alpha_blended_cull_front =
-            render_pipelines.get_or_create(ctx, &rp_shaded_alpha_blended_cull_front_desc);
-
-        let rp_picking_layer_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_picking_layer".into(),
-            fragment_entrypoint: "fs_main_picking_layer".into(),
-            render_targets: smallvec![Some(PickingLayerProcessor::PICKING_LAYER_FORMAT.into())],
-            depth_stencil: PickingLayerProcessor::PICKING_LAYER_DEPTH_STATE,
-            multisample: PickingLayerProcessor::PICKING_LAYER_MSAA_STATE,
-            ..rp_shaded_desc.clone()
-        };
-        let rp_picking_layer = render_pipelines.get_or_create(ctx, &rp_picking_layer_desc);
-        let rp_picking_layer_cull_back = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_picking_layer_cull_back".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..primitive
-                },
-                ..rp_picking_layer_desc.clone()
-            },
-        );
-        let rp_picking_layer_cull_front = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_picking_layer_cull_front".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Front),
-                    ..primitive
-                },
-                ..rp_picking_layer_desc
-            },
-        );
-
-        let rp_outline_mask_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_outline_mask".into(),
-            fragment_entrypoint: "fs_main_outline_mask".into(),
-            render_targets: smallvec![Some(OutlineMaskProcessor::MASK_FORMAT.into())],
-            depth_stencil: OutlineMaskProcessor::MASK_DEPTH_STATE,
-            multisample: OutlineMaskProcessor::mask_default_msaa_state(ctx.device_caps().tier),
-            ..rp_shaded_desc
-        };
-        let rp_outline_mask = render_pipelines.get_or_create(ctx, &rp_outline_mask_desc);
-        let rp_outline_mask_cull_back = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_outline_mask_cull_back".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..primitive
-                },
-                ..rp_outline_mask_desc.clone()
-            },
-        );
-        let rp_outline_mask_cull_front = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_outline_mask_cull_front".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Front),
-                    ..primitive
-                },
-                ..rp_outline_mask_desc
-            },
-        );
+        let default_program = MeshProgram::new(ctx, pipeline_layout, MeshProgramDesc { label: "default".into(), field: None, surface: None })
+            .expect("the default mesh program composes from embedded shaders");
 
         Self {
-            rp_shaded,
-            rp_shaded_cull_back,
-            rp_shaded_cull_front,
-            rp_shaded_alpha_blended_cull_back,
-            rp_shaded_alpha_blended_cull_front,
-            rp_picking_layer,
-            rp_picking_layer_cull_back,
-            rp_picking_layer_cull_front,
-            rp_outline_mask,
-            rp_outline_mask_cull_back,
-            rp_outline_mask_cull_front,
+            default_program: Arc::new(default_program),
             bind_group_layout,
+            pipeline_layout,
         }
     }
 
@@ -797,26 +564,28 @@ impl Renderer for MeshRenderer {
                     wgpu::IndexFormat::Uint32,
                 );
 
+                let program: &MeshProgram = mesh_batch.program.as_deref().unwrap_or(&self.default_program);
+
                 // Set per-batch pipeline based on cull mode.
                 // For the transparent phase this is done per-material below.
                 if phase != DrawPhase::Transparent {
                     let pipeline = match (phase, mesh_batch.cull_mode) {
-                        (DrawPhase::Opaque, None) => self.rp_shaded,
-                        (DrawPhase::Opaque, Some(wgpu::Face::Back)) => self.rp_shaded_cull_back,
-                        (DrawPhase::Opaque, Some(wgpu::Face::Front)) => self.rp_shaded_cull_front,
-                        (DrawPhase::PickingLayer, None) => self.rp_picking_layer,
+                        (DrawPhase::Opaque, None) => program.rp_shaded,
+                        (DrawPhase::Opaque, Some(wgpu::Face::Back)) => program.rp_shaded_cull_back,
+                        (DrawPhase::Opaque, Some(wgpu::Face::Front)) => program.rp_shaded_cull_front,
+                        (DrawPhase::PickingLayer, None) => program.rp_picking_layer,
                         (DrawPhase::PickingLayer, Some(wgpu::Face::Back)) => {
-                            self.rp_picking_layer_cull_back
+                            program.rp_picking_layer_cull_back
                         }
                         (DrawPhase::PickingLayer, Some(wgpu::Face::Front)) => {
-                            self.rp_picking_layer_cull_front
+                            program.rp_picking_layer_cull_front
                         }
-                        (DrawPhase::OutlineMask, None) => self.rp_outline_mask,
+                        (DrawPhase::OutlineMask, None) => program.rp_outline_mask,
                         (DrawPhase::OutlineMask, Some(wgpu::Face::Back)) => {
-                            self.rp_outline_mask_cull_back
+                            program.rp_outline_mask_cull_back
                         }
                         (DrawPhase::OutlineMask, Some(wgpu::Face::Front)) => {
-                            self.rp_outline_mask_cull_front
+                            program.rp_outline_mask_cull_front
                         }
                         _ => unreachable!(),
                     };
@@ -846,25 +615,25 @@ impl Renderer for MeshRenderer {
                                 // Default two-pass: first cull front faces, then cull back faces.
                                 pass.set_pipeline(
                                     render_pipelines
-                                        .get(self.rp_shaded_alpha_blended_cull_front)?,
+                                        .get(program.rp_shaded_alpha_blended_cull_front)?,
                                 );
                                 pass.draw_indexed(indices.clone(), 0, instances.clone());
 
                                 pass.set_pipeline(
-                                    render_pipelines.get(self.rp_shaded_alpha_blended_cull_back)?,
+                                    render_pipelines.get(program.rp_shaded_alpha_blended_cull_back)?,
                                 );
                                 pass.draw_indexed(indices, 0, instances);
                             }
                             Some(wgpu::Face::Back) => {
                                 pass.set_pipeline(
-                                    render_pipelines.get(self.rp_shaded_alpha_blended_cull_back)?,
+                                    render_pipelines.get(program.rp_shaded_alpha_blended_cull_back)?,
                                 );
                                 pass.draw_indexed(indices, 0, instances);
                             }
                             Some(wgpu::Face::Front) => {
                                 pass.set_pipeline(
                                     render_pipelines
-                                        .get(self.rp_shaded_alpha_blended_cull_front)?,
+                                        .get(program.rp_shaded_alpha_blended_cull_front)?,
                                 );
                                 pass.draw_indexed(indices, 0, instances);
                             }
@@ -984,8 +753,8 @@ mod tests {
             outline_mask_ids: OutlineMaskPreference::NONE,
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
-            surface: MeshSurface::default(),
-            displace: Default::default(),
+            program: None,
+            params: [0.0; 16],
         }
     }
 

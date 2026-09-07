@@ -159,8 +159,8 @@ fn mesh_instances(
                 outline_mask_ids: OutlineMaskPreference::NONE,
                 picking_layer_id: PickingLayerId::default(),
                 cull_mode: None,
-                surface: Default::default(),
-                displace: Default::default(),
+                program: None,
+                params: [0.0; 16],
             }
         })
         .collect();

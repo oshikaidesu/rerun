@@ -5,6 +5,36 @@
 #import <./utils/lighting.wgsl>
 #import <./utils/noise.wgsl>
 
+// This file is never compiled alone: `MeshProgram` appends the two hooks below
+// (defaults or the embedder's own) and compiles the result. See mesh_program.rs.
+//
+//   fn motolii_field(in: FieldIn) -> FieldOut        moves a vertex in the instance frame
+//   fn motolii_surface(in: SurfaceIn) -> vec3f       radiance leaving a shaded fragment
+
+/// Vertex hook input. `frame_position` is the vertex in the instance frame (rotation and scale of
+/// world_from_mesh, no translation), so a field travels with its mesh. `params` are the instance's 16 floats.
+struct FieldIn {
+    frame_position: vec3f,
+    normal: vec3f,
+    params: array<vec4f, 4>,
+};
+
+struct FieldOut {
+    /// Added to the world position.
+    offset: vec3f,
+    /// Replaces the world normal.
+    normal: vec3f,
+};
+
+/// Fragment hook input. `normal` already faces the camera (two-sided).
+struct SurfaceIn {
+    albedo: vec3f,
+    normal: vec3f,
+    view_dir: vec3f,
+    world_position: vec3f,
+    params: array<vec4f, 4>,
+};
+
 @group(1) @binding(0)
 var albedo_texture: texture_2d<f32>;
 
@@ -47,23 +77,14 @@ struct VertexOut {
     world_position: vec3f,
 
     @location(7) @interpolate(flat)
-    surface: vec4f, // roughness, metallic, transmission, ior
+    params0: vec4f,
+    @location(8) @interpolate(flat)
+    params1: vec4f,
+    @location(9) @interpolate(flat)
+    params2: vec4f,
+    @location(10) @interpolate(flat)
+    params3: vec4f,
 };
-
-/// Field coordinate for a point in the instance frame: shifted, scaled to feature size, moved by evolution.
-fn displace_coordinate(frame_position: vec3f, displace: vec4f, offset: vec4f) -> vec3f {
-    let size = max(displace.y, 1e-3);
-    return (frame_position + offset.xyz) / size + displace.z * vec3f(0.53, 0.71, 0.89);
-}
-
-/// Scalar field and its gradient (central differences) at a frame position.
-fn displace_scalar(q: vec3f, octaves: u32) -> f32 {
-    return fbm3(q, octaves);
-}
-
-fn displace_vector(q: vec3f, octaves: u32) -> vec3f {
-    return vec3f(fbm3(q, octaves), fbm3(q + vec3f(31.7, 0.0, 0.0), octaves), fbm3(q + vec3f(0.0, 47.3, 0.0), octaves));
-}
 
 @vertex
 fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
@@ -80,28 +101,10 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
         dot(in_instance.world_from_mesh_normal_row_2.xyz, in_vertex.normal),
     );
     var world_position = frame_position + translation;
-
-    let amount = in_instance.displace.x;
-    if amount != 0.0 {
-        let octaves = u32(clamp(in_instance.displace.w, 1.0, 8.0));
-        let q = displace_coordinate(frame_position, in_instance.displace, in_instance.displace_offset);
-        if in_instance.displace_offset.w < 0.5 && any(world_normal != vec3f(0.0)) {
-            let n = normalize(world_normal);
-            let h = displace_scalar(q, octaves);
-            world_position += n * amount * h;
-            // Bend the normal by the field's gradient (bump mapping): n' = n - amount * (∇h - n(n·∇h)) / size.
-            let e = 0.01;
-            let grad = vec3f(
-                displace_scalar(q + vec3f(e, 0.0, 0.0), octaves) - displace_scalar(q - vec3f(e, 0.0, 0.0), octaves),
-                displace_scalar(q + vec3f(0.0, e, 0.0), octaves) - displace_scalar(q - vec3f(0.0, e, 0.0), octaves),
-                displace_scalar(q + vec3f(0.0, 0.0, e), octaves) - displace_scalar(q - vec3f(0.0, 0.0, e), octaves),
-            ) / (2.0 * e * max(in_instance.displace.y, 1e-3));
-            let tangent_grad = grad - n * dot(n, grad);
-            world_normal = normalize(n - amount * tangent_grad);
-        } else {
-            world_position += amount * displace_vector(q, octaves);
-        }
-    }
+    let params = array<vec4f, 4>(in_instance.params0, in_instance.params1, in_instance.params2, in_instance.params3);
+    let field = motolii_field(FieldIn(frame_position, world_normal, params));
+    world_position += field.offset;
+    world_normal = field.normal;
 
     var out: VertexOut;
     out.position = frame.projection_from_world * vec4f(world_position, 1.0);
@@ -114,7 +117,10 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     out.outline_mask_ids = in_instance.outline_mask_ids;
     out.picking_layer_id = in_instance.picking_layer_id;
     out.world_position = world_position;
-    out.surface = in_instance.surface;
+    out.params0 = in_instance.params0;
+    out.params1 = in_instance.params1;
+    out.params2 = in_instance.params2;
+    out.params3 = in_instance.params3;
 
     return out;
 }
@@ -148,7 +154,8 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if dot(normal, view_dir) < 0.0 {
         normal = -normal; // two-sided
     }
-    let radiance = shade_surface(albedo.rgb, normal, view_dir, in.surface);
+    let params = array<vec4f, 4>(in.params0, in.params1, in.params2, in.params3);
+    let radiance = motolii_surface(SurfaceIn(albedo.rgb, normal, view_dir, in.world_position, params));
     return vec4f(radiance, albedo.a);
 }
 

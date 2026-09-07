@@ -19,7 +19,7 @@ mod buffer_pool;
 pub use buffer_pool::{BufferDesc, GpuBuffer, GpuBufferPool};
 
 mod pipeline_layout_pool;
-pub use pipeline_layout_pool::{GpuPipelineLayoutPool, PipelineLayoutDesc};
+pub use pipeline_layout_pool::{GpuPipelineLayoutHandle, GpuPipelineLayoutPool, PipelineLayoutDesc};
 
 mod render_pipeline_pool;
 pub use render_pipeline_pool::{

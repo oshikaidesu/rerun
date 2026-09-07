@@ -18,8 +18,10 @@ struct InstanceIn {
     @location(9) world_from_mesh_normal_row_2: vec3f,
     @location(10) additive_tint_srgba: vec4f,
     @location(11) picking_layer_id: vec4u,
-    @location(12) surface: vec4f, // roughness, metallic, transmission, ior
-    @location(13) displace: vec4f, // amount, size, evolution, complexity
-    @location(14) displace_offset: vec4f, // offset xyz, along (0 normal, 1 space)
-    @location(15) outline_mask_ids: vec2u,
+    // 16 floats the embedder's hooks read (see instanced_mesh_base.wgsl).
+    @location(12) params0: vec4f,
+    @location(13) params1: vec4f,
+    @location(14) params2: vec4f,
+    @location(15) params3: vec4f,
+    @location(16) outline_mask_ids: vec2u,
 };

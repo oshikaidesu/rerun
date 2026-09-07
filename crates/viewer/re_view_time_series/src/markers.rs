@@ -156,8 +156,8 @@ pub fn marker_instance(
         picking_layer_id: PickingLayerId::default(),
         cull_mode: None,
     },
-    surface: Default::default(),
-    displace: Default::default(),
+    program: None,
+    params: [0.0; 16],
 }
 
 /// Build a flat 2D unit-radius mesh for the given marker shape.

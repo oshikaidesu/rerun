@@ -353,8 +353,8 @@ impl<'ctx> ProcMeshDrawableBuilder<'ctx> {
                     } else {
                         None
                     },
-                    surface: Default::default(),
-                    displace: Default::default(),
+                    program: None,
+                    params: [0.0; 16],
                 });
             }
         }
