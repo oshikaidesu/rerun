@@ -119,7 +119,7 @@ impl framework::Example for Outlines {
                         additive_tint: Color32::BLACK,
                         cull_mode: None,
                         program: None,
-                        params: [0.0; 16],
+                        params: [0.0; 12],
                     })
             })
             .collect_vec();

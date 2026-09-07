@@ -90,7 +90,7 @@ impl Asset3DVisualizer {
                             // TODO(andreas): honor the culling settings from the mesh file if any.
                             cull_mode: Default::default(),
                             program: None,
-                            params: [0.0; 16],
+                            params: [0.0; 12],
                         }
                     }));
 

@@ -50,7 +50,7 @@ fn build_mesh_instances(
                     picking_layer_id: Default::default(),
                     cull_mode: None,
                     program: None,
-                    params: [0.0; 16],
+                    params: [0.0; 12],
                 },
             )
         })

@@ -160,7 +160,7 @@ fn mesh_instances(
                 picking_layer_id: PickingLayerId::default(),
                 cull_mode: None,
                 program: None,
-                params: [0.0; 16],
+                params: [0.0; 12],
             }
         })
         .collect();

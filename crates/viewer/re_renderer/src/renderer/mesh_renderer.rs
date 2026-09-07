@@ -48,8 +48,8 @@ pub(super) mod gpu_data {
 
         pub picking_layer_id: [u32; 4],
 
-        /// 16 floats the program's hooks read. See `GpuMeshInstance::params`.
-        pub params: [[f32; 4]; 4],
+        /// 12 floats the program's hooks read. See `GpuMeshInstance::params`.
+        pub params: [[f32; 4]; 3],
 
         // Need only the first two bytes, but we want to keep everything aligned to at least 4 bytes.
         pub outline_mask_ids: [u8; 4],
@@ -78,8 +78,7 @@ pub(super) mod gpu_data {
                         // Picking id.
                         // Again this adds overhead for non-picking passes, more this time. Consider moving this elsewhere.
                         wgpu::VertexFormat::Uint32x4,
-                        // Hook params (4 x vec4f).
-                        wgpu::VertexFormat::Float32x4,
+                        // Hook params (3 x vec4f). 16 vertex attribute locations is the floor of what wgpu guarantees.
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
@@ -171,8 +170,8 @@ pub struct GpuMeshInstance {
     /// Shader variant drawing this instance; `None` is the renderer's default (matte, no field).
     pub program: Option<Arc<MeshProgram>>,
 
-    /// 16 floats read by the program's hooks (`FieldIn::params` / `SurfaceIn::params`), in vec4 groups.
-    pub params: [f32; 16],
+    /// 12 floats read by the program's hooks (`FieldIn::params` / `SurfaceIn::params`), in vec4 groups.
+    pub params: [f32; 12],
 }
 
 impl GpuMeshInstance {
@@ -186,7 +185,7 @@ impl GpuMeshInstance {
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
             program: None,
-            params: [0.0; 16],
+            params: [0.0; 12],
         }
     }
 }
@@ -367,7 +366,6 @@ impl MeshDrawData {
                             [instance.params[0], instance.params[1], instance.params[2], instance.params[3]],
                             [instance.params[4], instance.params[5], instance.params[6], instance.params[7]],
                             [instance.params[8], instance.params[9], instance.params[10], instance.params[11]],
-                            [instance.params[12], instance.params[13], instance.params[14], instance.params[15]],
                         ],
                     })?;
 
@@ -754,7 +752,7 @@ mod tests {
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
             program: None,
-            params: [0.0; 16],
+            params: [0.0; 12],
         }
     }
 

@@ -185,7 +185,7 @@ impl framework::Example for Picking {
                 outline_mask_ids: Default::default(),
                 cull_mode: None,
                 program: None,
-                params: [0.0; 16],
+                params: [0.0; 12],
             })
             .collect_vec();
 

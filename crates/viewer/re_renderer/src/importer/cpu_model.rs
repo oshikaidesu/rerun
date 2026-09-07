@@ -99,7 +99,7 @@ impl CpuModel {
                     picking_layer_id: Default::default(),
                     cull_mode: Default::default(),
                     program: None,
-                    params: [0.0; 16],
+                    params: [0.0; 12],
                 })
             })
             .collect())

@@ -157,7 +157,7 @@ pub fn marker_instance(
         cull_mode: None,
     },
     program: None,
-    params: [0.0; 16],
+    params: [0.0; 12],
 }
 
 /// Build a flat 2D unit-radius mesh for the given marker shape.

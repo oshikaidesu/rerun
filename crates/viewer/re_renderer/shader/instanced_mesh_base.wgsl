@@ -12,11 +12,11 @@
 //   fn motolii_surface(in: SurfaceIn) -> vec3f       radiance leaving a shaded fragment
 
 /// Vertex hook input. `frame_position` is the vertex in the instance frame (rotation and scale of
-/// world_from_mesh, no translation), so a field travels with its mesh. `params` are the instance's 16 floats.
+/// world_from_mesh, no translation), so a field travels with its mesh. `params` are the instance's 12 floats.
 struct FieldIn {
     frame_position: vec3f,
     normal: vec3f,
-    params: array<vec4f, 4>,
+    params: array<vec4f, 3>,
 };
 
 struct FieldOut {
@@ -32,7 +32,7 @@ struct SurfaceIn {
     normal: vec3f,
     view_dir: vec3f,
     world_position: vec3f,
-    params: array<vec4f, 4>,
+    params: array<vec4f, 3>,
 };
 
 @group(1) @binding(0)
@@ -82,8 +82,6 @@ struct VertexOut {
     params1: vec4f,
     @location(9) @interpolate(flat)
     params2: vec4f,
-    @location(10) @interpolate(flat)
-    params3: vec4f,
 };
 
 @vertex
@@ -101,7 +99,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
         dot(in_instance.world_from_mesh_normal_row_2.xyz, in_vertex.normal),
     );
     var world_position = frame_position + translation;
-    let params = array<vec4f, 4>(in_instance.params0, in_instance.params1, in_instance.params2, in_instance.params3);
+    let params = array<vec4f, 3>(in_instance.params0, in_instance.params1, in_instance.params2);
     let field = motolii_field(FieldIn(frame_position, world_normal, params));
     world_position += field.offset;
     world_normal = field.normal;
@@ -120,7 +118,6 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     out.params0 = in_instance.params0;
     out.params1 = in_instance.params1;
     out.params2 = in_instance.params2;
-    out.params3 = in_instance.params3;
 
     return out;
 }
@@ -154,7 +151,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if dot(normal, view_dir) < 0.0 {
         normal = -normal; // two-sided
     }
-    let params = array<vec4f, 4>(in.params0, in.params1, in.params2, in.params3);
+    let params = array<vec4f, 3>(in.params0, in.params1, in.params2);
     let radiance = motolii_surface(SurfaceIn(albedo.rgb, normal, view_dir, in.world_position, params));
     return vec4f(radiance, albedo.a);
 }
