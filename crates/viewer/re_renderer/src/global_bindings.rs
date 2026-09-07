@@ -65,7 +65,7 @@ pub struct GlobalBindings {
     nearest_neighbor_sampler_repeat: GpuSamplerHandle,
     nearest_neighbor_sampler_clamped: GpuSamplerHandle,
     trilinear_sampler_repeat: GpuSamplerHandle,
-    trilinear_sampler_clamped: GpuSamplerHandle,
+    equirect_sampler: GpuSamplerHandle,
 }
 
 /// Textures bound in group 0 for the environment (see [`crate::Environment`]).
@@ -142,7 +142,7 @@ impl GlobalBindings {
                             },
                             count: None,
                         },
-                        // Trilinear sampler, clamped.
+                        // Trilinear sampler for equirectangular maps: repeat u, clamp v.
                         wgpu::BindGroupLayoutEntry {
                             binding: 6,
                             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -185,14 +185,15 @@ impl GlobalBindings {
                     ..Default::default()
                 },
             ),
-            trilinear_sampler_clamped: pools.samplers.get_or_create(
+            equirect_sampler: pools.samplers.get_or_create(
                 device,
                 &SamplerDesc {
-                    label: "GlobalBindings::trilinear_sampler_clamped".into(),
+                    label: "GlobalBindings::equirect_sampler".into(),
                     mag_filter: wgpu::FilterMode::Linear,
                     min_filter: wgpu::FilterMode::Linear,
                     mipmap_filter: wgpu::MipmapFilterMode::Linear,
-                    address_mode_u: wgpu::AddressMode::ClampToEdge,
+                    // Longitude wraps, latitude clamps at the poles.
+                    address_mode_u: wgpu::AddressMode::Repeat,
                     address_mode_v: wgpu::AddressMode::ClampToEdge,
                     address_mode_w: wgpu::AddressMode::ClampToEdge,
                     ..Default::default()
@@ -222,7 +223,7 @@ impl GlobalBindings {
                     BindGroupEntry::Sampler(self.trilinear_sampler_repeat),
                     BindGroupEntry::DefaultTextureView(environment.radiance),
                     BindGroupEntry::DefaultTextureView(environment.irradiance),
-                    BindGroupEntry::Sampler(self.trilinear_sampler_clamped),
+                    BindGroupEntry::Sampler(self.equirect_sampler),
                 ],
                 layout: self.layout,
             },

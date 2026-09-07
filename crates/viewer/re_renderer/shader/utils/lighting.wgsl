@@ -25,7 +25,7 @@ fn environment_direction(world_dir: vec3f) -> vec3f {
 /// Background radiance seen along a world direction.
 fn environment_radiance_along(world_dir: vec3f) -> vec3f {
     let uv = equirect_uv_from_direction(environment_direction(world_dir));
-    return textureSampleLevel(environment_radiance, trilinear_sampler_clamped, uv, 0.0).rgb * frame.environment_strength;
+    return textureSampleLevel(environment_radiance, equirect_sampler, uv, 0.0).rgb * frame.environment_strength;
 }
 
 /// Diffuse shading (radiance per unit albedo) for a world normal: the bound environment when present,
@@ -33,7 +33,7 @@ fn environment_radiance_along(world_dir: vec3f) -> vec3f {
 fn diffuse_shading(normal: vec3f) -> vec3f {
     if frame.environment_present == 1u {
         let uv = equirect_uv_from_direction(environment_direction(normal));
-        return textureSampleLevel(environment_irradiance, trilinear_sampler_clamped, uv, 0.0).rgb * frame.environment_strength;
+        return textureSampleLevel(environment_irradiance, equirect_sampler, uv, 0.0).rgb * frame.environment_strength;
     }
     return vec3f(simple_lighting(normal));
 }

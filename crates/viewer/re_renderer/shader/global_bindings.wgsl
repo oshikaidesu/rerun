@@ -56,7 +56,7 @@ var environment_radiance: texture_2d<f32>;
 @group(0) @binding(5)
 var environment_irradiance: texture_2d<f32>;
 @group(0) @binding(6)
-var trilinear_sampler_clamped: sampler;
+var equirect_sampler: sampler;
 
 // See config.rs#DeviceTier
 const DEVICE_TIER_GLES = 0u;
