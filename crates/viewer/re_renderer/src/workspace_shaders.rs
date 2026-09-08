@@ -116,6 +116,12 @@ pub fn init() {
     }
 
     {
+        let virtpath = Path::new("shader/rectangle_fragment.wgsl");
+        let content = include_str!("../shader/rectangle_fragment.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
         let virtpath = Path::new("shader/rectangle_fs.wgsl");
         let content = include_str!("../shader/rectangle_fs.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
@@ -136,6 +142,12 @@ pub fn init() {
     {
         let virtpath = Path::new("shader/screen_triangle_vertex.wgsl");
         let content = include_str!("../shader/screen_triangle_vertex.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
+        let virtpath = Path::new("shader/surface.wgsl");
+        let content = include_str!("../shader/surface.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
     }
 
