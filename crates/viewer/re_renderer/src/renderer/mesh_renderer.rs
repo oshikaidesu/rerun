@@ -17,8 +17,7 @@ use crate::mesh::gpu_data::MaterialUniformBuffer;
 use crate::mesh::GpuMesh;
 use crate::renderer::{DrawDataDrawable, DrawInstruction, DrawableCollectionViewInfo};
 use crate::wgpu_resources::{
-    BindGroupLayoutDesc, BufferDesc, GpuBindGroupLayoutHandle, GpuBuffer, GpuPipelineLayoutHandle,
-    GpuRenderPipelinePoolAccessor, PipelineLayoutDesc,
+    BindGroupDesc, BindGroupLayoutDesc, BufferDesc, GpuBindGroup, GpuBindGroupLayoutHandle, GpuBuffer, GpuPipelineLayoutHandle, GpuRenderPipelinePoolAccessor, PipelineLayoutDesc,
 };
 use crate::{Color32, CpuWriteGpuReadError, DrawableCollector, OutlineMaskPreference, PickingLayerId};
 
@@ -126,6 +125,20 @@ pub struct MeshDrawData {
     // instance range on every instanced draw call!
     instance_buffer: Option<GpuBuffer>,
     batches: Vec<MeshBatch>,
+    /// World-space cut for every instance of this draw data (group 2).
+    clip_bind_group: Option<GpuBindGroup>,
+}
+
+mod clip_gpu_data {
+    use crate::wgpu_buffer_types;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    pub struct ClipUniformBuffer {
+        pub plane: wgpu_buffer_types::Vec4,
+        pub cap: wgpu_buffer_types::U32RowPadded,
+        pub _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 2],
+    }
 }
 
 impl DrawData for MeshDrawData {
@@ -245,14 +258,42 @@ impl MeshDrawData {
         ctx: &RenderContext,
         instances: &[GpuMeshInstance],
     ) -> Result<Self, CpuWriteGpuReadError> {
+        Self::new_clipped(ctx, instances, crate::ClipPlane::NONE)
+    }
+
+    /// Like [`Self::new`], with a world-space cut applied to every instance.
+    pub fn new_clipped(
+        ctx: &RenderContext,
+        instances: &[GpuMeshInstance],
+        clip: crate::ClipPlane,
+    ) -> Result<Self, CpuWriteGpuReadError> {
         re_tracing::profile_function!();
 
         if instances.is_empty() {
             return Ok(Self {
                 batches: Vec::new(),
                 instance_buffer: None,
+                clip_bind_group: None,
             });
         }
+
+        let clip_bind_group = {
+            let uniform = clip_gpu_data::ClipUniformBuffer {
+                plane: clip.gpu().into(),
+                cap: u32::from(clip.cap).into(),
+                _end_padding: Default::default(),
+            };
+            let binding = crate::allocator::create_and_fill_uniform_buffer(ctx, "MeshDrawData::clip".into(), uniform);
+            ctx.gpu_resources.bind_groups.alloc(
+                &ctx.device,
+                &ctx.gpu_resources,
+                &BindGroupDesc {
+                    label: "MeshDrawData::clip_bind_group".into(),
+                    entries: smallvec![binding],
+                    layout: ctx.renderer::<MeshRenderer>().clip_bind_group_layout,
+                },
+            )
+        };
 
         // Group by mesh to facilitate instancing.
 
@@ -440,6 +481,7 @@ impl MeshDrawData {
         Ok(Self {
             batches,
             instance_buffer: Some(instance_buffer),
+            clip_bind_group: Some(clip_bind_group),
         })
     }
 }
@@ -447,6 +489,8 @@ impl MeshDrawData {
 pub struct MeshRenderer {
     default_program: Arc<MeshProgram>,
     pub bind_group_layout: GpuBindGroupLayoutHandle,
+    /// Group 2: the draw data's world-space cut.
+    pub clip_bind_group_layout: GpuBindGroupLayoutHandle,
     pub(crate) pipeline_layout: GpuPipelineLayoutHandle,
 }
 
@@ -486,11 +530,29 @@ impl Renderer for MeshRenderer {
                 ],
             },
         );
+        let clip_bind_group_layout = ctx.gpu_resources.bind_group_layouts.get_or_create(
+            &ctx.device,
+            &BindGroupLayoutDesc {
+                label: "MeshRenderer::clip_bind_group_layout".into(),
+                entries: vec![wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: (std::mem::size_of::<clip_gpu_data::ClipUniformBuffer>() as u64)
+                            .try_into()
+                            .ok(),
+                    },
+                    count: None,
+                }],
+            },
+        );
         let pipeline_layout = ctx.gpu_resources.pipeline_layouts.get_or_create(
             ctx,
             &PipelineLayoutDesc {
                 label: "MeshRenderer::pipeline_layout".into(),
-                entries: vec![ctx.global_bindings.layout, bind_group_layout],
+                entries: vec![ctx.global_bindings.layout, bind_group_layout, clip_bind_group_layout],
             },
         );
 
@@ -500,6 +562,7 @@ impl Renderer for MeshRenderer {
         Self {
             default_program: Arc::new(default_program),
             bind_group_layout,
+            clip_bind_group_layout,
             pipeline_layout,
         }
     }
@@ -530,6 +593,9 @@ impl Renderer for MeshRenderer {
                 continue; // Instance buffer was empty.
             };
             pass.set_vertex_buffer(0, instance_buffer.slice(..));
+            if let Some(clip) = &draw_data.clip_bind_group {
+                pass.set_bind_group(2, clip, &[]);
+            }
 
             for drawable in *drawables {
                 let mesh_batch = &draw_data.batches[drawable.draw_data_payload as usize];

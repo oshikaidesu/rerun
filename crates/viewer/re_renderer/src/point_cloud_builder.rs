@@ -320,6 +320,12 @@ impl PointCloudBatchBuilder<'_, '_> {
 
     /// Adds (!) flags for this batch.
     #[inline]
+    /// World-space cut for the whole batch (see [`crate::ClipPlane`]).
+    pub fn clip(mut self, clip: crate::ClipPlane) -> Self {
+        self.batch_mut().clip = clip;
+        self
+    }
+
     pub fn flags(mut self, flags: PointCloudBatchFlags) -> Self {
         self.batch_mut().flags |= flags;
         self

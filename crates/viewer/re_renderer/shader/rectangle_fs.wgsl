@@ -92,6 +92,9 @@ fn filter_bicubic(colors: array<vec4f, 16>, wx: vec4f, wy: vec4f) -> vec4f {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4f {
+    if clip_outside(rect_info.clip_plane, in.world_position) {
+        discard;
+    }
     // Sample the main texture:
     var normalized_value: vec4f;
 

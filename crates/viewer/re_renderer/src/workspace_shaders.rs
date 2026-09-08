@@ -158,6 +158,12 @@ pub fn init() {
     }
 
     {
+        let virtpath = Path::new("shader/utils/clip.wgsl");
+        let content = include_str!("../shader/utils/clip.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
         let virtpath = Path::new("shader/utils/depth_offset.wgsl");
         let content = include_str!("../shader/utils/depth_offset.wgsl").into();
         fs.create_file(virtpath, content).unwrap();

@@ -149,7 +149,9 @@ pub mod gpu_data {
         pub outline_mask_ids: wgpu_buffer_types::UVec2,
         pub picking_object_id: PickingLayerObjectId,
 
-        pub end_padding: [wgpu_buffer_types::PaddingRow; 16 - 6],
+        pub clip_plane: wgpu_buffer_types::Vec4,
+
+        pub end_padding: [wgpu_buffer_types::PaddingRow; 16 - 7],
     }
 }
 
@@ -375,6 +377,9 @@ pub struct PointCloudBatchInfo {
     /// Object-space bounds used to place the batch in the draw-phase distance ordering.
     pub object_space_bounding_box: macaw::BoundingBox,
 
+    /// World-space cut (see [`crate::ClipPlane`]); points past the plane are discarded.
+    pub clip: crate::ClipPlane,
+
     /// Optional outline mask setting for the entire batch.
     pub overall_outline_mask_ids: OutlineMaskPreference,
 
@@ -417,6 +422,7 @@ impl Default for PointCloudBatchInfo {
             flags: PointCloudBatchFlags::FLAG_ENABLE_SHADING,
             point_count: 0,
             object_space_bounding_box: macaw::BoundingBox::nothing(),
+            clip: crate::ClipPlane::NONE,
             overall_outline_mask_ids: OutlineMaskPreference::NONE,
             additional_outline_mask_ids_vertex_ranges: Vec::new(),
             picking_object_id: Default::default(),
@@ -472,6 +478,7 @@ impl PointCloudDrawData {
             flags: PointCloudBatchFlags::empty(),
             point_count: num_vertices as _,
             object_space_bounding_box: macaw::BoundingBox::nothing(),
+            clip: crate::ClipPlane::NONE,
             overall_outline_mask_ids: OutlineMaskPreference::NONE,
             additional_outline_mask_ids_vertex_ranges: Vec::new(),
             picking_object_id: Default::default(),
@@ -579,6 +586,7 @@ impl PointCloudDrawData {
                         depth_offset: batch_info.depth_offset as f32,
                         first_point_index: current_first_point_index,
                         _row_padding: 0,
+                        clip_plane: batch_info.clip.gpu().into(),
                         end_padding: Default::default(),
                     }
                 }),
@@ -614,6 +622,7 @@ impl PointCloudDrawData {
                                         depth_offset: batch_info.depth_offset as f32,
                                         first_point_index: current_first_point_index,
                                         _row_padding: 0,
+                                        clip_plane: batch_info.clip.gpu().into(),
                                         end_padding: Default::default(),
                                     }),
                             )

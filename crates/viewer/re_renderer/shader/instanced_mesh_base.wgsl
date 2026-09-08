@@ -4,6 +4,7 @@
 #import <./utils/srgb.wgsl>
 #import <./utils/lighting.wgsl>
 #import <./utils/noise.wgsl>
+#import <./utils/clip.wgsl>
 
 // This file is never compiled alone: `MeshProgram` appends the two hooks below
 // (defaults or the embedder's own) and compiles the result. See mesh_program.rs.
@@ -52,6 +53,15 @@ struct MaterialUniformBuffer {
 
 @group(1) @binding(1)
 var<uniform> material: MaterialUniformBuffer;
+
+// Keep in sync with `clip_gpu_data::ClipUniformBuffer` in mesh_renderer.rs
+struct ClipUniformBuffer {
+    plane: vec4f,
+    cap: u32,
+};
+
+@group(2) @binding(0)
+var<uniform> clip: ClipUniformBuffer;
 
 struct VertexOut {
     @builtin(position)
@@ -129,6 +139,9 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
 
 @fragment
 fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
+    if clip_outside(clip.plane, in.world_position) {
+        discard;
+    }
     let sample = textureSample(albedo_texture, trilinear_sampler_repeat, in.texcoord);
     var texture: vec3f;
     switch material.texture_format {
@@ -153,8 +166,14 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     }
     let view_dir = view_direction_to_camera(in.world_position);
     var normal = normalize(in.normal_world_space);
-    if dot(normal, view_dir) < 0.0 {
+    let back_side = dot(normal, view_dir) < 0.0;
+    if back_side {
         normal = -normal; // two-sided
+    }
+    // Inside faces seen through the cut (their normal points away from the viewer) read as a flat cap:
+    // shade them with the plane's normal. Winding is not used: meshes are drawn two-sided.
+    if clip.cap == 1u && back_side && dot(clip.plane.xyz, clip.plane.xyz) > 0.0 {
+        normal = normalize(clip.plane.xyz);
     }
     let params = array<vec4f, 3>(in.params0, in.params1, in.params2);
     let radiance = motolii_surface(SurfaceIn(albedo.rgb, normal, view_dir, in.world_position, in.thickness, params));
@@ -163,6 +182,9 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
 
 @fragment
 fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
+    if clip_outside(clip.plane, in.world_position) {
+        discard;
+    }
     return in.picking_layer_id;
 }
 

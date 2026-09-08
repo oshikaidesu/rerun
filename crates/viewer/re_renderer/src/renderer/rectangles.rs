@@ -247,6 +247,9 @@ pub struct RectangleOptions {
 
     /// Optional outline mask.
     pub outline_mask: OutlineMaskPreference,
+
+    /// World-space cut (see [`crate::ClipPlane`]).
+    pub clip: crate::ClipPlane,
 }
 
 impl Default for RectangleOptions {
@@ -257,6 +260,7 @@ impl Default for RectangleOptions {
             multiplicative_tint: Rgba::WHITE,
             depth_offset: 0,
             outline_mask: OutlineMaskPreference::NONE,
+            clip: crate::ClipPlane::NONE,
         }
     }
 }
@@ -337,7 +341,9 @@ mod gpu_data {
         bgra_to_rgba: u32,
         _row_padding: [u32; 1],
 
-        _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 7],
+        clip_plane: wgpu_buffer_types::Vec4,
+
+        _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 8],
     }
 
     impl UniformBuffer {
@@ -375,6 +381,7 @@ mod gpu_data {
                 multiplicative_tint,
                 depth_offset,
                 outline_mask,
+                clip,
             } = options;
 
             let sample_type = match texture_format.sample_type(None, None) {
@@ -428,6 +435,7 @@ mod gpu_data {
                 extent_v: (*extent_v).into(),
                 depth_offset: *depth_offset as f32,
                 multiplicative_tint: *multiplicative_tint,
+                clip_plane: clip.gpu().into(),
                 outline_mask: outline_mask_override
                     .with_fallback_to(*outline_mask)
                     .0

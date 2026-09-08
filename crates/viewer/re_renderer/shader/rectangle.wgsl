@@ -1,4 +1,5 @@
 #import <./types.wgsl>
+#import <./utils/clip.wgsl>
 
 // Keep in sync with mirror in rectangle.rs
 
@@ -80,6 +81,9 @@ struct UniformBuffer {
 
     /// Boolean: swizzle RGBA to BGRA
     bgra_to_rgba: u32,
+
+    /// World-space cut: (normal, distance); zero normal = none.
+    clip_plane: vec4f,
 };
 
 @group(1) @binding(0)
@@ -103,6 +107,7 @@ var texture_float_filterable: texture_2d<f32>;
 struct VertexOut {
     @builtin(position) position: vec4f,
     @location(0) texcoord: vec2f,
+    @location(1) world_position: vec3f,
 };
 
 // The fragment and vertex shaders are in two separate files in order
