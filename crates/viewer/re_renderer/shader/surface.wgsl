@@ -12,4 +12,3 @@ struct SurfaceIn {
     uv: vec2f,
     coverage: f32,
 };
-

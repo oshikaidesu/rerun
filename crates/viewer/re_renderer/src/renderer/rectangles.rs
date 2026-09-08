@@ -466,7 +466,8 @@ mod gpu_data {
                 bgra_to_rgba: bgra_to_rgba as _,
                 surface_params: std::array::from_fn(|i| {
                     let p = rectangle.options.surface_params;
-                    [p[i * 4], p[i * 4 + 1], p[i * 4 + 2], p[i * 4 + 3]].into()
+                    glam::Vec4::from_array([p[i * 4], p[i * 4 + 1], p[i * 4 + 2], p[i * 4 + 3]])
+                        .into()
                 }),
                 surface_thickness: rectangle.options.surface_thickness,
                 _surface_padding: Default::default(),
