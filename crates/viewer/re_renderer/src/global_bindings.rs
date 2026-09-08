@@ -66,6 +66,7 @@ pub struct GlobalBindings {
     nearest_neighbor_sampler_clamped: GpuSamplerHandle,
     trilinear_sampler_repeat: GpuSamplerHandle,
     equirect_sampler: GpuSamplerHandle,
+    screen_sampler: GpuSamplerHandle,
 }
 
 /// Textures bound in group 0 for the environment (see [`crate::Environment`]).
@@ -73,6 +74,9 @@ pub struct GlobalBindings {
 pub struct EnvironmentBindings {
     pub radiance: GpuTextureHandle,
     pub irradiance: GpuTextureHandle,
+    /// Screen-space picture already composited beneath this view's meshes (premultiplied, with a
+    /// mip chain), read by transmissive surfaces. Zero texture when there is none.
+    pub backdrop: GpuTextureHandle,
 }
 
 impl GlobalBindings {
@@ -149,6 +153,24 @@ impl GlobalBindings {
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
+                        // Backdrop: what is already drawn beneath this view's meshes (screen space).
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 7,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // Trilinear clamped sampler for screen-space lookups, whole mip chain open.
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 8,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
                     ],
                 },
             ),
@@ -202,6 +224,20 @@ impl GlobalBindings {
                     ..Default::default()
                 },
             ),
+            screen_sampler: pools.samplers.get_or_create(
+                device,
+                &SamplerDesc {
+                    label: "GlobalBindings::screen_sampler".into(),
+                    mag_filter: wgpu::FilterMode::Linear,
+                    min_filter: wgpu::FilterMode::Linear,
+                    mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                    address_mode_u: wgpu::AddressMode::ClampToEdge,
+                    address_mode_v: wgpu::AddressMode::ClampToEdge,
+                    address_mode_w: wgpu::AddressMode::ClampToEdge,
+                    lod_max_clamp: ordered_float::NotNan::new(32.0).expect("finite"),
+                    ..Default::default()
+                },
+            ),
         }
     }
 
@@ -227,6 +263,8 @@ impl GlobalBindings {
                     BindGroupEntry::DefaultTextureView(environment.radiance),
                     BindGroupEntry::DefaultTextureView(environment.irradiance),
                     BindGroupEntry::Sampler(self.equirect_sampler),
+                    BindGroupEntry::DefaultTextureView(environment.backdrop),
+                    BindGroupEntry::Sampler(self.screen_sampler),
                 ],
                 layout: self.layout,
             },

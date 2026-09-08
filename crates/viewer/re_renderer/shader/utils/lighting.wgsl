@@ -70,9 +70,11 @@ fn env_brdf_approx(f0: vec3f, roughness: f32, n_dot_v: f32) -> vec3f {
 }
 
 /// Radiance leaving a surface: Lambert diffuse from the irradiance map, glossy reflection from the
-/// radiance mip chain (split-sum), and refracted see-through of the environment for transmissive surfaces.
+/// radiance mip chain (split-sum), and for transmissive surfaces the refracted see-through of what
+/// is drawn behind (the backdrop, read where the refracted ray leaves a slab of `thickness`; vgpu's
+/// transmission example) with the environment where nothing is drawn.
 /// `surface` = (roughness, metallic, transmission, ior). Without an environment, the fixed lights apply.
-fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, surface: vec4f) -> vec3f {
+fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: vec3f, thickness: f32, surface: vec4f) -> vec3f {
     let roughness = clamp(surface.x, 0.0, 1.0);
     let metallic = clamp(surface.y, 0.0, 1.0);
     let transmission = clamp(surface.z, 0.0, 1.0);
@@ -94,7 +96,14 @@ fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, surface: vec4f) 
         let fresnel = f0_dielectric + (1.0 - f0_dielectric) * pow(1.0 - n_dot_v, 5.0);
         let refracted = refract(-view_dir, normal, 1.0 / ior);
         let through = select(reflected, refracted, any(refracted != vec3f(0.0)));
-        transmitted = environment_specular_along(through, roughness) * albedo * transmission * (1.0 - metallic) * (1.0 - fresnel);
+        let exit = world_position + through * thickness;
+        let clip = frame.projection_from_world * vec4f(exit, 1.0);
+        let uv = clamp(vec2f(clip.x, -clip.y) / max(clip.w, 1e-4) * 0.5 + 0.5, vec2f(0.0), vec2f(1.0));
+        let levels = f32(textureNumLevels(backdrop_texture));
+        let lod = pow(roughness, 0.8) * max(levels - 1.0, 0.0) * 0.55;
+        let behind = textureSampleLevel(backdrop_texture, screen_sampler, uv, lod);
+        let seen = behind.rgb + (1.0 - behind.a) * environment_specular_along(through, roughness);
+        transmitted = seen * albedo * transmission * (1.0 - metallic) * (1.0 - fresnel);
     }
     return diffuse + specular + transmitted;
 }

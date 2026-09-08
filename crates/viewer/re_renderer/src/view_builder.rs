@@ -289,16 +289,22 @@ pub struct TargetConfiguration {
     /// Image-based environment lighting the view's meshes. Draw [`crate::renderer::GenericSkyboxType::Environment`]
     /// to also show it as the background.
     pub environment: Option<crate::Environment>,
+
+    /// What is already drawn beneath this view's meshes, in screen space (premultiplied, with a mip
+    /// chain). Transmissive surfaces refract into it; where its alpha is 0 the environment shows.
+    pub backdrop: Option<crate::resource_managers::GpuTexture2D>,
 }
 
 fn environment_bindings(
     ctx: &RenderContext,
-    environment: Option<&crate::Environment>,
+    config: &TargetConfiguration,
 ) -> crate::global_bindings::EnvironmentBindings {
     let zero = ctx.texture_manager_2d.zeroed_texture_float().handle;
+    let environment = config.environment.as_ref();
     crate::global_bindings::EnvironmentBindings {
         radiance: environment.map_or(zero, |e| e.radiance.handle()),
         irradiance: environment.map_or(zero, |e| e.irradiance.handle()),
+        backdrop: config.backdrop.as_ref().map_or(zero, |b| b.handle()),
     }
 }
 
@@ -320,6 +326,7 @@ impl Default for TargetConfiguration {
             blend_with_background: BlendWithBackground::No,
             picking_config: None,
             environment: None,
+            backdrop: None,
         }
     }
 }
@@ -639,7 +646,7 @@ impl ViewBuilder {
             &ctx.gpu_resources,
             &ctx.device,
             frame_uniform_buffer,
-            environment_bindings(ctx, config.environment.as_ref()),
+            environment_bindings(ctx, &config),
         );
 
         let mut debug_overlays: Vec<QueueableDrawData> = Vec::new();
@@ -911,7 +918,7 @@ impl ViewBuilder {
             &ctx.gpu_resources,
             &ctx.device,
             frame_uniform_buffer,
-            environment_bindings(ctx, config.environment.as_ref()),
+            environment_bindings(ctx, &config),
         );
 
         let mut debug_overlays: Vec<QueueableDrawData> = Vec::new();

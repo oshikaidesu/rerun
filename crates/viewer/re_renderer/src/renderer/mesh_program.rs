@@ -31,7 +31,7 @@ pub struct MeshProgramDesc {
 
 pub const DEFAULT_FIELD: &str = "fn motolii_field(in: FieldIn) -> FieldOut { return FieldOut(vec3f(0.0), in.normal); }";
 pub const DEFAULT_SURFACE: &str =
-    "fn motolii_surface(in: SurfaceIn) -> vec3f { return shade_surface(in.albedo, in.normal, in.view_dir, vec4f(1.0, 0.0, 0.0, 1.5)); }";
+    "fn motolii_surface(in: SurfaceIn) -> vec3f { return shade_surface(in.albedo, in.normal, in.view_dir, in.world_position, in.thickness, vec4f(1.0, 0.0, 0.0, 1.5)); }";
 
 pub struct MeshProgram {
     pub(crate) desc: MeshProgramDesc,

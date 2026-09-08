@@ -32,6 +32,8 @@ struct SurfaceIn {
     normal: vec3f,
     view_dir: vec3f,
     world_position: vec3f,
+    /// Instance scale (length of one axis of world_from_mesh): the slab a refracted ray crosses.
+    thickness: f32,
     params: array<vec4f, 3>,
 };
 
@@ -82,6 +84,8 @@ struct VertexOut {
     params1: vec4f,
     @location(9) @interpolate(flat)
     params2: vec4f,
+    @location(10) @interpolate(flat)
+    thickness: f32,
 };
 
 @vertex
@@ -118,6 +122,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     out.params0 = in_instance.params0;
     out.params1 = in_instance.params1;
     out.params2 = in_instance.params2;
+    out.thickness = length(in_instance.world_from_mesh_row_0.xyz);
 
     return out;
 }
@@ -152,7 +157,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         normal = -normal; // two-sided
     }
     let params = array<vec4f, 3>(in.params0, in.params1, in.params2);
-    let radiance = motolii_surface(SurfaceIn(albedo.rgb, normal, view_dir, in.world_position, params));
+    let radiance = motolii_surface(SurfaceIn(albedo.rgb, normal, view_dir, in.world_position, in.thickness, params));
     return vec4f(radiance, albedo.a);
 }
 
