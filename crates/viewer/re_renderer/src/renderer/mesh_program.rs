@@ -1,7 +1,7 @@
 //! A compiled variant of the mesh shader with the embedder's hooks appended.
 //!
 //! `instanced_mesh_base.wgsl` calls two functions it does not define — `motolii_field` (vertex) and
-//! `motolii_surface` (fragment). A [`MeshProgram`] appends either the defaults or the embedder's own
+//! `motolii_surface` (fragment). A [`SurfaceProgram`] appends either the defaults or the embedder's own
 //! WGSL, writes the composed file next to the base shader (or a temp dir when shaders load from disk),
 //! and builds the full pipeline set. Instances point at a program; the renderer batches by it.
 
@@ -11,17 +11,17 @@ use std::path::PathBuf;
 use smallvec::smallvec;
 
 use crate::draw_phases::{OutlineMaskProcessor, PickingLayerProcessor};
+use crate::mesh::mesh_vertices;
 use crate::renderer::mesh_renderer::gpu_data;
 use crate::view_builder::ViewBuilder;
 use crate::wgpu_resources::{
     GpuPipelineLayoutHandle, GpuRenderPipelineHandle, RenderPipelineDesc, ShaderModuleDesc,
 };
-use crate::mesh::mesh_vertices;
-use crate::{include_file, Label, RenderContext};
+use crate::{Label, RenderContext, include_file};
 
 /// Hook sources. `None` keeps the default (no displacement / matte dielectric).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub struct MeshProgramDesc {
+pub struct SurfaceProgramDesc {
     pub label: String,
     /// WGSL defining `fn motolii_field(in: FieldIn) -> FieldOut`.
     pub field: Option<String>,
@@ -29,12 +29,13 @@ pub struct MeshProgramDesc {
     pub surface: Option<String>,
 }
 
-pub const DEFAULT_FIELD: &str = "fn motolii_field(in: FieldIn) -> FieldOut { return FieldOut(vec3f(0.0), in.normal); }";
-pub const DEFAULT_SURFACE: &str =
-    "fn motolii_surface(in: SurfaceIn) -> vec3f { return shade_surface(in.albedo, in.normal, in.view_dir, in.world_position, in.thickness, vec4f(1.0, 0.0, 0.0, 1.5)); }";
+pub const DEFAULT_FIELD: &str =
+    "fn motolii_field(in: FieldIn) -> FieldOut { return FieldOut(vec3f(0.0), in.normal); }";
+pub const DEFAULT_SURFACE: &str = "fn motolii_surface(in: SurfaceIn) -> vec3f { return shade_surface(in.albedo, in.normal, in.view_dir, in.world_position, in.thickness, vec4f(1.0, 0.0, 0.0, 1.5)); }";
 
-pub struct MeshProgram {
-    pub(crate) desc: MeshProgramDesc,
+pub struct SurfaceProgram {
+    pub(crate) rectangle_pipelines: Option<[GpuRenderPipelineHandle; 2]>,
+    pub(crate) desc: SurfaceProgramDesc,
 
     pub(crate) rp_shaded: GpuRenderPipelineHandle,
     pub(crate) rp_shaded_cull_back: GpuRenderPipelineHandle,
@@ -52,9 +53,11 @@ pub struct MeshProgram {
     pub(crate) rp_outline_mask_cull_front: GpuRenderPipelineHandle,
 }
 
-impl std::fmt::Debug for MeshProgram {
+impl std::fmt::Debug for SurfaceProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MeshProgram").field("desc", &self.desc).finish_non_exhaustive()
+        f.debug_struct("SurfaceProgram")
+            .field("desc", &self.desc)
+            .finish_non_exhaustive()
     }
 }
 
@@ -63,7 +66,7 @@ fn base_path() -> PathBuf {
 }
 
 /// Full WGSL of a variant, for validation by the embedder before creating pipelines.
-pub fn compose_source(desc: &MeshProgramDesc) -> String {
+pub fn compose_source(desc: &SurfaceProgramDesc) -> String {
     let import = if cfg!(load_shaders_from_disk) {
         base_path().display().to_string()
     } else {
@@ -76,12 +79,14 @@ pub fn compose_source(desc: &MeshProgramDesc) -> String {
     )
 }
 
-fn variant_path(desc: &MeshProgramDesc) -> PathBuf {
+fn variant_path(desc: &SurfaceProgramDesc) -> PathBuf {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     desc.hash(&mut hasher);
     let name = format!("motolii_mesh_{:016x}.wgsl", hasher.finish());
     if cfg!(load_shaders_from_disk) {
-        std::env::temp_dir().join(format!("re_renderer-mesh-programs-{}", std::process::id())).join(name)
+        std::env::temp_dir()
+            .join(format!("re_renderer-mesh-programs-{}", std::process::id()))
+            .join(name)
     } else {
         base_path().with_file_name(name)
     }
@@ -111,14 +116,69 @@ fn write_variant(path: &std::path::Path, text: &str) -> anyhow::Result<()> {
     }
 }
 
-impl MeshProgram {
+impl SurfaceProgram {
     /// A variant sharing the mesh renderer's bind group and pipeline layouts.
-    pub fn new(ctx: &RenderContext, desc: MeshProgramDesc) -> anyhow::Result<Self> {
-        let pipeline_layout = ctx.renderer::<super::mesh_renderer::MeshRenderer>().pipeline_layout;
-        Self::with_layout(ctx, pipeline_layout, desc)
+    pub fn new(ctx: &RenderContext, desc: SurfaceProgramDesc) -> anyhow::Result<Self> {
+        let pipeline_layout = ctx
+            .renderer::<super::mesh_renderer::MeshRenderer>()
+            .pipeline_layout;
+        let mut program = Self::with_layout(ctx, pipeline_layout, desc)?;
+        let base = ctx
+            .renderer::<super::rectangles::RectangleRenderer>()
+            .surface_pipeline_desc
+            .clone();
+        let path = variant_path(&program.desc).with_extension("rectangle.wgsl");
+        let import = if cfg!(load_shaders_from_disk) {
+            base_path()
+                .with_file_name("rectangle_fragment.wgsl")
+                .display()
+                .to_string()
+        } else {
+            "./rectangle_fragment.wgsl".to_owned()
+        };
+        let surface = program
+            .desc
+            .surface
+            .as_deref()
+            .unwrap_or("fn motolii_surface(in: SurfaceIn) -> vec3f { return in.albedo; }");
+        write_variant(&path, &format!("#import <{import}>\n{surface}\n"))?;
+        let shader = ctx.gpu_resources.shader_modules.get_or_create(
+            ctx,
+            &ShaderModuleDesc {
+                label: format!("SurfaceProgram::rectangle::{}", program.desc.label).into(),
+                source: path,
+                extra_workaround_replacements: Vec::new(),
+            },
+        );
+        let opaque = RenderPipelineDesc {
+            fragment_handle: shader,
+            ..base
+        };
+        let transparent = RenderPipelineDesc {
+            render_targets: smallvec![Some(wgpu::ColorTargetState {
+                format: ViewBuilder::MAIN_TARGET_COLOR_FORMAT,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            depth_stencil: Some(ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE_NO_WRITE),
+            ..opaque.clone()
+        };
+        program.rectangle_pipelines = Some([
+            ctx.gpu_resources
+                .render_pipelines
+                .get_or_create(ctx, &opaque),
+            ctx.gpu_resources
+                .render_pipelines
+                .get_or_create(ctx, &transparent),
+        ]);
+        Ok(program)
     }
 
-    pub(crate) fn with_layout(ctx: &RenderContext, pipeline_layout: GpuPipelineLayoutHandle, desc: MeshProgramDesc) -> anyhow::Result<Self> {
+    pub(crate) fn with_layout(
+        ctx: &RenderContext,
+        pipeline_layout: GpuPipelineLayoutHandle,
+        desc: SurfaceProgramDesc,
+    ) -> anyhow::Result<Self> {
         re_tracing::profile_function!();
 
         let path = variant_path(&desc);
@@ -126,7 +186,7 @@ impl MeshProgram {
         let shader_module = ctx.gpu_resources.shader_modules.get_or_create(
             ctx,
             &ShaderModuleDesc {
-                label: Label::from(format!("MeshProgram::{}", desc.label)),
+                label: Label::from(format!("SurfaceProgram::{}", desc.label)),
                 source: path,
                 extra_workaround_replacements: Vec::new(),
             },
@@ -147,11 +207,16 @@ impl MeshProgram {
             mesh_vertices::vertex_buffer_layouts(),
         )
         .collect();
-        let label = |suffix: &str| Label::from(format!("MeshProgram::{}::{suffix}", desc.label));
-        let cull = |base: &RenderPipelineDesc, face: Option<wgpu::Face>, suffix: &str| RenderPipelineDesc {
-            label: label(suffix),
-            primitive: wgpu::PrimitiveState { cull_mode: face, ..primitive },
-            ..base.clone()
+        let label = |suffix: &str| Label::from(format!("SurfaceProgram::{}::{suffix}", desc.label));
+        let cull = |base: &RenderPipelineDesc, face: Option<wgpu::Face>, suffix: &str| {
+            RenderPipelineDesc {
+                label: label(suffix),
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: face,
+                    ..primitive
+                },
+                ..base.clone()
+            }
         };
 
         let rp_shaded_desc = RenderPipelineDesc {
@@ -195,22 +260,79 @@ impl MeshProgram {
         };
 
         Ok(Self {
+            rectangle_pipelines: None,
             rp_shaded: render_pipelines.get_or_create(ctx, &rp_shaded_desc),
-            rp_shaded_cull_back: render_pipelines.get_or_create(ctx, &cull(&rp_shaded_desc, Some(wgpu::Face::Back), "shaded_cull_back")),
-            rp_shaded_cull_front: render_pipelines.get_or_create(ctx, &cull(&rp_shaded_desc, Some(wgpu::Face::Front), "shaded_cull_front")),
-            rp_shaded_alpha_blended_cull_back: render_pipelines.get_or_create(ctx, &cull(&rp_shaded_alpha_blended_desc, Some(wgpu::Face::Back), "shaded_alpha_blended_cull_back")),
-            rp_shaded_alpha_blended_cull_front: render_pipelines.get_or_create(ctx, &cull(&rp_shaded_alpha_blended_desc, Some(wgpu::Face::Front), "shaded_alpha_blended_cull_front")),
+            rp_shaded_cull_back: render_pipelines.get_or_create(
+                ctx,
+                &cull(&rp_shaded_desc, Some(wgpu::Face::Back), "shaded_cull_back"),
+            ),
+            rp_shaded_cull_front: render_pipelines.get_or_create(
+                ctx,
+                &cull(
+                    &rp_shaded_desc,
+                    Some(wgpu::Face::Front),
+                    "shaded_cull_front",
+                ),
+            ),
+            rp_shaded_alpha_blended_cull_back: render_pipelines.get_or_create(
+                ctx,
+                &cull(
+                    &rp_shaded_alpha_blended_desc,
+                    Some(wgpu::Face::Back),
+                    "shaded_alpha_blended_cull_back",
+                ),
+            ),
+            rp_shaded_alpha_blended_cull_front: render_pipelines.get_or_create(
+                ctx,
+                &cull(
+                    &rp_shaded_alpha_blended_desc,
+                    Some(wgpu::Face::Front),
+                    "shaded_alpha_blended_cull_front",
+                ),
+            ),
             rp_picking_layer: render_pipelines.get_or_create(ctx, &rp_picking_layer_desc),
-            rp_picking_layer_cull_back: render_pipelines.get_or_create(ctx, &cull(&rp_picking_layer_desc, Some(wgpu::Face::Back), "picking_layer_cull_back")),
-            rp_picking_layer_cull_front: render_pipelines.get_or_create(ctx, &cull(&rp_picking_layer_desc, Some(wgpu::Face::Front), "picking_layer_cull_front")),
+            rp_picking_layer_cull_back: render_pipelines.get_or_create(
+                ctx,
+                &cull(
+                    &rp_picking_layer_desc,
+                    Some(wgpu::Face::Back),
+                    "picking_layer_cull_back",
+                ),
+            ),
+            rp_picking_layer_cull_front: render_pipelines.get_or_create(
+                ctx,
+                &cull(
+                    &rp_picking_layer_desc,
+                    Some(wgpu::Face::Front),
+                    "picking_layer_cull_front",
+                ),
+            ),
             rp_outline_mask: render_pipelines.get_or_create(ctx, &rp_outline_mask_desc),
-            rp_outline_mask_cull_back: render_pipelines.get_or_create(ctx, &cull(&rp_outline_mask_desc, Some(wgpu::Face::Back), "outline_mask_cull_back")),
-            rp_outline_mask_cull_front: render_pipelines.get_or_create(ctx, &cull(&rp_outline_mask_desc, Some(wgpu::Face::Front), "outline_mask_cull_front")),
+            rp_outline_mask_cull_back: render_pipelines.get_or_create(
+                ctx,
+                &cull(
+                    &rp_outline_mask_desc,
+                    Some(wgpu::Face::Back),
+                    "outline_mask_cull_back",
+                ),
+            ),
+            rp_outline_mask_cull_front: render_pipelines.get_or_create(
+                ctx,
+                &cull(
+                    &rp_outline_mask_desc,
+                    Some(wgpu::Face::Front),
+                    "outline_mask_cull_front",
+                ),
+            ),
             desc,
         })
     }
 
-    pub fn desc(&self) -> &MeshProgramDesc {
+    pub fn desc(&self) -> &SurfaceProgramDesc {
         &self.desc
     }
 }
+
+/// Compatibility names for mesh-only callers.
+pub type MeshProgram = SurfaceProgram;
+pub type MeshProgramDesc = SurfaceProgramDesc;

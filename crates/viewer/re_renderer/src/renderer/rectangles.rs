@@ -10,6 +10,8 @@
 //! Since we're not allowed to bind many textures at once (no widespread bindless support!),
 //! we are forced to have individual bind groups per rectangle and thus a draw call per rectangle.
 
+use std::sync::Arc;
+
 use itertools::{Itertools as _, izip};
 use smallvec::smallvec;
 
@@ -250,6 +252,12 @@ pub struct RectangleOptions {
 
     /// World-space cut (see [`crate::ClipPlane`]).
     pub clip: crate::ClipPlane,
+
+    /// Shared surface shader, also accepted by mesh instances. None keeps the image unlit.
+    pub surface: Option<Arc<super::SurfaceProgram>>,
+    pub surface_params: [f32; 12],
+    /// Optical slab thickness in world units; independent of the planar geometry.
+    pub surface_thickness: f32,
 }
 
 impl Default for RectangleOptions {
@@ -261,6 +269,9 @@ impl Default for RectangleOptions {
             depth_offset: 0,
             outline_mask: OutlineMaskPreference::NONE,
             clip: crate::ClipPlane::NONE,
+            surface: None,
+            surface_params: [0.0; 12],
+            surface_thickness: 1.0,
         }
     }
 }
@@ -343,7 +354,10 @@ mod gpu_data {
 
         clip_plane: wgpu_buffer_types::Vec4,
 
-        _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 8],
+        surface_params: [wgpu_buffer_types::Vec4; 3],
+        surface_thickness: f32,
+        _surface_padding: [f32; 3],
+        _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 12],
     }
 
     impl UniformBuffer {
@@ -382,6 +396,7 @@ mod gpu_data {
                 depth_offset,
                 outline_mask,
                 clip,
+                ..
             } = options;
 
             let sample_type = match texture_format.sample_type(None, None) {
@@ -449,6 +464,12 @@ mod gpu_data {
                 decode_srgb: *decode_srgb as _,
                 texture_alpha: *texture_alpha as _,
                 bgra_to_rgba: bgra_to_rgba as _,
+                surface_params: std::array::from_fn(|i| {
+                    let p = rectangle.options.surface_params;
+                    [p[i * 4], p[i * 4 + 1], p[i * 4 + 2], p[i * 4 + 3]].into()
+                }),
+                surface_thickness: rectangle.options.surface_thickness,
+                _surface_padding: Default::default(),
                 _row_padding: Default::default(),
                 _end_padding: Default::default(),
             })
@@ -458,6 +479,7 @@ mod gpu_data {
 
 #[derive(Clone)]
 struct RectangleInstance {
+    surface: Option<Arc<super::SurfaceProgram>>,
     sorting_position: glam::Vec3A,
     secondary_sort_key: f32,
     force_transparent: bool,
@@ -586,6 +608,7 @@ impl RectangleDrawData {
             let force_transparent = cluster_info.has_coplanar_overlap;
 
             instances.push(RectangleInstance {
+                surface: rectangle.options.surface.clone(),
                 sorting_position: cluster_info.sorting_position,
                 secondary_sort_key: rectangle.options.depth_offset as f32,
                 force_transparent,
@@ -624,6 +647,7 @@ impl RectangleDrawData {
 }
 
 pub struct RectangleRenderer {
+    pub(crate) surface_pipeline_desc: RenderPipelineDesc,
     render_pipeline_color_opaque: GpuRenderPipelineHandle,
     render_pipeline_color_transparent: GpuRenderPipelineHandle,
     render_pipeline_picking_layer: GpuRenderPipelineHandle,
@@ -801,6 +825,7 @@ impl Renderer for RectangleRenderer {
         );
 
         Self {
+            surface_pipeline_desc: render_pipeline_desc_color_opaque,
             render_pipeline_color_opaque,
             render_pipeline_color_transparent,
             render_pipeline_picking_layer,
@@ -838,6 +863,16 @@ impl Renderer for RectangleRenderer {
         {
             for drawable in *drawables {
                 let rectangles = &draw_data.instances[drawable.draw_data_payload as usize];
+                let handle = match (&rectangles.surface, phase) {
+                    (Some(program), DrawPhase::Opaque) => {
+                        program.rectangle_pipelines.expect("public surface program")[0]
+                    }
+                    (Some(program), DrawPhase::Transparent) => {
+                        program.rectangle_pipelines.expect("public surface program")[1]
+                    }
+                    _ => pipeline_handle,
+                };
+                pass.set_pipeline(render_pipelines.get(handle)?);
                 pass.set_bind_group(1, &rectangles.bind_group, &[]);
                 pass.draw(0..4, 0..1);
             }

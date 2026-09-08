@@ -27,16 +27,7 @@ struct FieldOut {
     normal: vec3f,
 };
 
-/// Fragment hook input. `normal` already faces the camera (two-sided).
-struct SurfaceIn {
-    albedo: vec3f,
-    normal: vec3f,
-    view_dir: vec3f,
-    world_position: vec3f,
-    /// Instance scale (length of one axis of world_from_mesh): the slab a refracted ray crosses.
-    thickness: f32,
-    params: array<vec4f, 3>,
-};
+#import <./surface.wgsl>
 
 @group(1) @binding(0)
 var albedo_texture: texture_2d<f32>;
@@ -176,7 +167,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         normal = normalize(clip.plane.xyz);
     }
     let params = array<vec4f, 3>(in.params0, in.params1, in.params2);
-    let radiance = motolii_surface(SurfaceIn(albedo.rgb, normal, view_dir, in.world_position, in.thickness, params));
+    let radiance = motolii_surface(SurfaceIn(albedo.rgb, normal, view_dir, in.world_position, in.thickness, params, in.texcoord, albedo.a));
     return vec4f(radiance, albedo.a);
 }
 

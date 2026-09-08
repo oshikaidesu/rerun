@@ -15,7 +15,10 @@ mod world_grid;
 pub use debug_overlay::{DebugOverlayDrawData, DebugOverlayError, DebugOverlayRenderer};
 pub use generic_skybox::{GenericSkyboxDrawData, GenericSkyboxType};
 pub use lines::{LineBatchInfo, LineDrawData, LineDrawDataError, LineStripFlags};
-pub use mesh_program::{compose_source as compose_mesh_program_source, MeshProgram, MeshProgramDesc, DEFAULT_FIELD, DEFAULT_SURFACE};
+pub use mesh_program::{
+    DEFAULT_FIELD, DEFAULT_SURFACE, MeshProgram, MeshProgramDesc, SurfaceProgram,
+    SurfaceProgramDesc, compose_source as compose_mesh_program_source,
+};
 pub use mesh_renderer::{GpuMeshInstance, MeshDrawData};
 pub use point_cloud::{
     PointCloudBatchFlags, PointCloudBatchInfo, PointCloudDrawData, PointCloudDrawDataError,
