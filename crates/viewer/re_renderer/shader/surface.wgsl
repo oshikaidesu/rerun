@@ -2,6 +2,7 @@
 
 /// Fragment hook input. `normal` already faces the camera (two-sided).
 struct SurfaceIn {
+    /// Linear, unpremultiplied source color. Output radiance is unpremultiplied too.
     albedo: vec3f,
     normal: vec3f,
     view_dir: vec3f,

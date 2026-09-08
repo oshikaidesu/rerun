@@ -167,8 +167,12 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         normal = normalize(clip.plane.xyz);
     }
     let params = array<vec4f, 3>(in.params0, in.params1, in.params2);
-    let radiance = motolii_surface(SurfaceIn(albedo.rgb, normal, view_dir, in.world_position, in.thickness, params, in.texcoord, albedo.a));
-    return vec4f(radiance, albedo.a);
+    let coverage = albedo.a;
+    if coverage <= 0.0 {
+        return vec4f(0.0);
+    }
+    let radiance = motolii_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position, in.thickness, params, in.texcoord, coverage));
+    return vec4f(radiance * coverage, coverage);
 }
 
 @fragment
