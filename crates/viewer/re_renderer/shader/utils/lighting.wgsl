@@ -39,27 +39,17 @@ fn diffuse_shading(normal: vec3f) -> vec3f {
     return vec3f(simple_lighting(normal));
 }
 
-/// Mirrors `SPECULAR_LEVELS` in `environment.rs`.
-const SPECULAR_LEVELS: f32 = 5.0;
-
-/// Glossy radiance along a world direction for a roughness in [0, 1]: roughness 0 is the radiance map itself,
-/// higher values blend through the stacked prefiltered levels.
+/// Glossy radiance along a world direction for a roughness in [0, 1]: the radiance map's mip chain,
+/// level picked by roughness. Mirrors `roughness_to_lod` in `environment.rs` (Karis 2013,
+/// `ComputeReflectionCaptureMipFromRoughness`: `1 - 1.2 log2(r)` levels above 1x1 for a cube face;
+/// an equirectangular map is four faces wide, hence two more levels).
 fn environment_specular_along(world_dir: vec3f, roughness: f32) -> vec3f {
     let uv = equirect_uv_from_direction(environment_direction(world_dir));
-    let f = clamp(roughness, 0.0, 1.0) * SPECULAR_LEVELS; // 0 = radiance, k = level k
-    let lo = floor(f);
-    let t = f - lo;
-    let sample_level = fn_level(uv, lo);
-    let sample_next = fn_level(uv, min(lo + 1.0, SPECULAR_LEVELS));
-    return mix(sample_level, sample_next, t) * frame.environment_strength;
-}
-
-fn fn_level(uv: vec2f, level: f32) -> vec3f {
-    if level < 0.5 {
-        return textureSampleLevel(environment_radiance, equirect_sampler, uv, 0.0).rgb;
-    }
-    let atlas_uv = vec2f(uv.x, (level - 1.0 + uv.y) / SPECULAR_LEVELS);
-    return textureSampleLevel(environment_specular, equirect_sampler, atlas_uv, 0.0).rgb;
+    let levels = f32(textureNumLevels(environment_radiance));
+    let r = clamp(roughness, 0.0, 1.0);
+    let above_1x1 = 1.0 - 1.2 * log2(max(r, 0.0001)) + 2.0;
+    let lod = clamp(levels - 1.0 - above_1x1, 0.0, levels - 1.0);
+    return textureSampleLevel(environment_radiance, equirect_sampler, uv, lod).rgb * frame.environment_strength;
 }
 
 fn view_direction_to_camera(world_position: vec3f) -> vec3f {
@@ -80,7 +70,7 @@ fn env_brdf_approx(f0: vec3f, roughness: f32, n_dot_v: f32) -> vec3f {
 }
 
 /// Radiance leaving a surface: Lambert diffuse from the irradiance map, glossy reflection from the
-/// prefiltered levels (split-sum), and refracted see-through of the environment for transmissive surfaces.
+/// radiance mip chain (split-sum), and refracted see-through of the environment for transmissive surfaces.
 /// `surface` = (roughness, metallic, transmission, ior). Without an environment, the fixed lights apply.
 fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, surface: vec4f) -> vec3f {
     let roughness = clamp(surface.x, 0.0, 1.0);

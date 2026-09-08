@@ -7,6 +7,7 @@
 //! low level gpu resources and their efficient allocation.
 
 mod image_data_to_texture;
+mod mipmap;
 mod texture_manager;
 mod yuv_converter;
 
@@ -18,3 +19,4 @@ pub use texture_manager::{
     TextureManager2DError,
 };
 pub use yuv_converter::{YuvMatrixCoefficients, YuvPixelLayout, YuvRange};
+pub use self::mipmap::MipmapGenerator;

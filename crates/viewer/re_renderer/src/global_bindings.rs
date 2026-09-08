@@ -73,7 +73,6 @@ pub struct GlobalBindings {
 pub struct EnvironmentBindings {
     pub radiance: GpuTextureHandle,
     pub irradiance: GpuTextureHandle,
-    pub specular: GpuTextureHandle,
 }
 
 impl GlobalBindings {
@@ -150,17 +149,6 @@ impl GlobalBindings {
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
-                        // Environment specular atlas (equirectangular levels stacked vertically).
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 7,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
                     ],
                 },
             ),
@@ -208,6 +196,9 @@ impl GlobalBindings {
                     address_mode_u: wgpu::AddressMode::Repeat,
                     address_mode_v: wgpu::AddressMode::ClampToEdge,
                     address_mode_w: wgpu::AddressMode::ClampToEdge,
+                    // `SamplerDesc::default()` clamps lod to 0, which silently pins every
+                    // `textureSampleLevel` to the base level; open the whole mip chain.
+                    lod_max_clamp: ordered_float::NotNan::new(32.0).expect("finite"),
                     ..Default::default()
                 },
             ),
@@ -236,7 +227,6 @@ impl GlobalBindings {
                     BindGroupEntry::DefaultTextureView(environment.radiance),
                     BindGroupEntry::DefaultTextureView(environment.irradiance),
                     BindGroupEntry::Sampler(self.equirect_sampler),
-                    BindGroupEntry::DefaultTextureView(environment.specular),
                 ],
                 layout: self.layout,
             },
