@@ -35,6 +35,9 @@ pub struct SceneReflection {
     pub count: u32,
     pub bounds_min: glam::Vec3,
     pub bounds_max: glam::Vec3,
+    /// Fully trusted radius around each capture; fades to zero at twice this radius.
+    /// Zero retains unbounded legacy blending.
+    pub influence_radii: [f32; 2],
 }
 
 /// Mip level of the radiance map for a roughness in [0, 1], given the chain's level count.

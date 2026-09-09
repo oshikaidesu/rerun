@@ -146,15 +146,26 @@ fn local_reflection(position: vec3f, direction: vec3f, roughness: f32, origin: v
     return captured;
 }
 
+fn reflection_influence(position: vec3f, origin: vec3f, radius: f32) -> f32 {
+    if radius <= 0.0 { return 1.0; }
+    let radial = 1.0 - smoothstep(radius, 2.0 * radius, distance(position, origin));
+    let border = min(position - frame.reflection_min.xyz, frame.reflection_max.xyz - position);
+    let fade = max((frame.reflection_max.xyz - frame.reflection_min.xyz) * 0.05, vec3f(1e-4));
+    let box_weight = smoothstep(vec3f(0.0), fade, border);
+    return radial * min(box_weight.x, min(box_weight.y, box_weight.z));
+}
+
 fn scene_specular(position: vec3f, direction: vec3f, roughness: f32) -> vec3f {
     let fallback = environment_specular_along(direction, roughness);
     if frame.reflection_origin.w == 0.0 { return fallback; }
-    var captured = local_reflection(position,direction,roughness,frame.reflection_origin.xyz,0u);
+    let w0 = reflection_influence(position, frame.reflection_origin.xyz, frame.reflection_origin_second.w);
+    var captured = local_reflection(position,direction,roughness,frame.reflection_origin.xyz,0u) * w0;
     if frame.reflection_origin.w > 1.0 {
         let d0 = position-frame.reflection_origin.xyz;
         let d1 = position-frame.reflection_origin_second.xyz;
         let weight = smoothstep(0.0,1.0,dot(d0,d0)/max(dot(d0,d0)+dot(d1,d1),1e-6));
-        captured = mix(captured,local_reflection(position,direction,roughness,frame.reflection_origin_second.xyz,1u),weight);
+        let w1 = reflection_influence(position, frame.reflection_origin_second.xyz, frame.reflection_min.w);
+        captured = mix(captured,local_reflection(position,direction,roughness,frame.reflection_origin_second.xyz,1u) * w1,weight);
     }
     return captured.rgb + (1.0-captured.a)*fallback;
 }
