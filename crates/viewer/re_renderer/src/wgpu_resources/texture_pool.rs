@@ -168,6 +168,11 @@ impl GpuTexturePool {
     }
 
     /// Method to retrieve a resource from a weak handle (used by [`super::GpuBindGroupPool`])
+    /// Imported textures can be rewritten by their external owner.
+    pub fn is_imported(&self, handle: GpuTextureHandle) -> bool {
+        self.imported.read().contains(&handle)
+    }
+
     pub fn get_from_handle(&self, handle: GpuTextureHandle) -> Result<GpuTexture, PoolError> {
         self.pool.get_from_handle(handle)
     }
