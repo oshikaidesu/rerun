@@ -26,6 +26,16 @@ pub struct Environment {
     pub strength: f32,
 }
 
+/// Shared local reflection capture. Six faces (+X, -X, +Y, -Y, +Z, -Z) in a 3x2 atlas.
+/// RGB is linear radiance and alpha is coverage; uncovered directions use the environment.
+#[derive(Clone, Debug)]
+pub struct SceneReflection {
+    pub atlas: GpuTexture2D,
+    pub origin: glam::Vec3,
+    pub bounds_min: glam::Vec3,
+    pub bounds_max: glam::Vec3,
+}
+
 /// Mip level of the radiance map for a roughness in [0, 1], given the chain's level count.
 /// Mirrors `environment_specular_along` in `shader/utils/lighting.wgsl`. Borrowed from Karis 2013
 /// (`ComputeReflectionCaptureMipFromRoughness`): a GGX lobe of roughness `r` wants the level
@@ -48,10 +58,15 @@ fn weighted_texels(rgb: &[f32], width: usize, height: usize) -> Vec<(glam::Vec3,
                 (y as f32 + 0.5) / height as f32,
             );
             let theta = uv.y * std::f32::consts::PI;
-            let solid_angle =
-                theta.sin() * (std::f32::consts::PI / height as f32) * (std::f32::consts::TAU / width as f32);
+            let solid_angle = theta.sin()
+                * (std::f32::consts::PI / height as f32)
+                * (std::f32::consts::TAU / width as f32);
             let i = (y * width + x) * 3;
-            (direction_from_equirect_uv(uv), glam::vec3(rgb[i], rgb[i + 1], rgb[i + 2]), solid_angle)
+            (
+                direction_from_equirect_uv(uv),
+                glam::vec3(rgb[i], rgb[i + 1], rgb[i + 2]),
+                solid_angle,
+            )
         })
         .collect()
 }
@@ -123,7 +138,9 @@ mod tests {
             let back = equirect_uv_from_direction(direction_from_equirect_uv(uv));
             assert!((back - uv).length() < 1e-4, "{uv} -> {back}");
         }
-        assert!((direction_from_equirect_uv(glam::vec2(0.5, 0.5)) - glam::Vec3::NEG_Z).length() < 1e-5);
+        assert!(
+            (direction_from_equirect_uv(glam::vec2(0.5, 0.5)) - glam::Vec3::NEG_Z).length() < 1e-5
+        );
         assert!((direction_from_equirect_uv(glam::vec2(0.5, 0.0)) - glam::Vec3::Y).length() < 1e-5);
     }
 
@@ -133,7 +150,12 @@ mod tests {
         let rgb: Vec<f32> = (0..w * h).flat_map(|_| [2.0, 0.5, 1.0]).collect();
         let out = convolve_irradiance(&rgb, w, h, 4, 2);
         for px in out.chunks(3) {
-            assert!((px[0] - 2.0).abs() < 0.02 && (px[1] - 0.5).abs() < 0.01 && (px[2] - 1.0).abs() < 0.02, "{px:?}");
+            assert!(
+                (px[0] - 2.0).abs() < 0.02
+                    && (px[1] - 0.5).abs() < 0.01
+                    && (px[2] - 1.0).abs() < 0.02,
+                "{px:?}"
+            );
         }
     }
 

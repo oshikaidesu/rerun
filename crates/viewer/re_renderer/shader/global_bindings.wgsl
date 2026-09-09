@@ -40,6 +40,9 @@ struct FrameUniformBuffer {
 
     /// Rotation applied to world directions before the equirectangular lookup.
     environment_from_world: mat3x3f,
+    reflection_origin: vec4f,
+    reflection_min: vec4f,
+    reflection_max: vec4f,
 };
 
 @group(0) @binding(0)
@@ -61,6 +64,9 @@ var equirect_sampler: sampler;
 var backdrop_texture: texture_2d<f32>;
 @group(0) @binding(8)
 var screen_sampler: sampler;
+
+@group(0) @binding(9)
+var scene_reflection: texture_2d<f32>;
 
 // See config.rs#DeviceTier
 const DEVICE_TIER_GLES = 0u;

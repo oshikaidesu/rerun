@@ -293,6 +293,7 @@ pub struct TargetConfiguration {
     /// What is already drawn beneath this view's meshes, in screen space (premultiplied, with a mip
     /// chain). Transmissive surfaces refract into it; where its alpha is 0 the environment shows.
     pub backdrop: Option<crate::resource_managers::GpuTexture2D>,
+    pub scene_reflection: Option<crate::environment::SceneReflection>,
 }
 
 fn environment_bindings(
@@ -305,6 +306,10 @@ fn environment_bindings(
         radiance: environment.map_or(zero, |e| e.radiance.handle()),
         irradiance: environment.map_or(zero, |e| e.irradiance.handle()),
         backdrop: config.backdrop.as_ref().map_or(zero, |b| b.handle()),
+        reflection: config
+            .scene_reflection
+            .as_ref()
+            .map_or(zero, |r| r.atlas.handle()),
     }
 }
 
@@ -327,6 +332,7 @@ impl Default for TargetConfiguration {
             picking_config: None,
             environment: None,
             backdrop: None,
+            scene_reflection: None,
         }
     }
 }
@@ -629,6 +635,21 @@ impl ViewBuilder {
             ),
             environment_strength: config.environment.as_ref().map_or(0.0, |e| e.strength),
             environment_present: config.environment.is_some() as u32,
+            reflection_origin: config
+                .scene_reflection
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |r| r.origin.extend(1.0))
+                .into(),
+            reflection_min: config
+                .scene_reflection
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |r| r.bounds_min.extend(0.0))
+                .into(),
+            reflection_max: config
+                .scene_reflection
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |r| r.bounds_max.extend(0.0))
+                .into(),
             environment_from_world: config
                 .environment
                 .as_ref()
@@ -901,6 +922,21 @@ impl ViewBuilder {
             ),
             environment_strength: config.environment.as_ref().map_or(0.0, |e| e.strength),
             environment_present: config.environment.is_some() as u32,
+            reflection_origin: config
+                .scene_reflection
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |r| r.origin.extend(1.0))
+                .into(),
+            reflection_min: config
+                .scene_reflection
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |r| r.bounds_min.extend(0.0))
+                .into(),
+            reflection_max: config
+                .scene_reflection
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |r| r.bounds_max.extend(0.0))
+                .into(),
             environment_from_world: config
                 .environment
                 .as_ref()

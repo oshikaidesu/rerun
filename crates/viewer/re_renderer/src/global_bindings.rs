@@ -56,7 +56,10 @@ pub struct FrameUniformBuffer {
     /// Rotation applied to world directions before the equirectangular lookup.
     pub environment_from_world: wgpu_buffer_types::Mat3,
 
-    pub _end_padding: [wgpu_buffer_types::PaddingRow; 13],
+    pub reflection_origin: wgpu_buffer_types::Vec4,
+    pub reflection_min: wgpu_buffer_types::Vec4,
+    pub reflection_max: wgpu_buffer_types::Vec4,
+    pub _end_padding: [wgpu_buffer_types::PaddingRow; 10],
 }
 
 /// Global bindings which are always available on bind group 0 for all [`crate::renderer::Renderer`].
@@ -77,6 +80,7 @@ pub struct EnvironmentBindings {
     /// Screen-space picture already composited beneath this view's meshes (premultiplied, with a
     /// mip chain), read by transmissive surfaces. Zero texture when there is none.
     pub backdrop: GpuTextureHandle,
+    pub reflection: GpuTextureHandle,
 }
 
 impl GlobalBindings {
@@ -169,6 +173,16 @@ impl GlobalBindings {
                             binding: 8,
                             visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 9,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
                             count: None,
                         },
                     ],
@@ -265,6 +279,7 @@ impl GlobalBindings {
                     BindGroupEntry::Sampler(self.equirect_sampler),
                     BindGroupEntry::DefaultTextureView(environment.backdrop),
                     BindGroupEntry::Sampler(self.screen_sampler),
+                    BindGroupEntry::DefaultTextureView(environment.reflection),
                 ],
                 layout: self.layout,
             },
