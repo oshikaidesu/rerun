@@ -1,16 +1,23 @@
 const FILTER_SURFACE_FOOTPRINT: bool = false;
 var<private> surface_position_dx: vec3f;
 var<private> surface_position_dy: vec3f;
+var<private> surface_normal_reference: vec3f;
 var<private> surface_normal_dx: vec3f;
 var<private> surface_normal_dy: vec3f;
 var<private> surface_ray_dx: vec3f;
 var<private> surface_ray_dy: vec3f;
 
 fn prepare_surface_footprint(position: vec3f, normal: vec3f) {
+    surface_normal_reference = normal;
     surface_position_dx = dpdx(position);
     surface_position_dy = dpdy(position);
     surface_normal_dx = dpdx(normal);
     surface_normal_dy = dpdy(normal);
+}
+
+fn footprint_neighbor_normal(normal: vec3f, delta: vec3f) -> vec3f {
+    let orientation = select(-1.0,1.0,dot(normal,surface_normal_reference) >= 0.0);
+    return normalize(normal + orientation * delta);
 }
 
 fn footprint_lod(dx: vec2f, dy: vec2f, size: vec2f) -> f32 {
@@ -176,8 +183,8 @@ fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: 
     let diffuse = albedo * diffuse_weight * diffuse_shading(normal);
     let reflected = reflect(-view_dir, normal);
     if FILTER_SURFACE_FOOTPRINT {
-        surface_ray_dx = reflect(-view_direction_to_camera(world_position + surface_position_dx), normalize(normal + surface_normal_dx)) - reflected;
-        surface_ray_dy = reflect(-view_direction_to_camera(world_position + surface_position_dy), normalize(normal + surface_normal_dy)) - reflected;
+        surface_ray_dx = reflect(-view_direction_to_camera(world_position + surface_position_dx), footprint_neighbor_normal(normal,surface_normal_dx)) - reflected;
+        surface_ray_dy = reflect(-view_direction_to_camera(world_position + surface_position_dy), footprint_neighbor_normal(normal,surface_normal_dy)) - reflected;
     }
     let specular = scene_specular(world_position, reflected, roughness) * env_brdf_approx(f0, roughness, n_dot_v);
     var transmitted = vec3f(0.0);
@@ -193,7 +200,7 @@ fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: 
         if FILTER_SURFACE_FOOTPRINT {
             let vx = -view_direction_to_camera(world_position + surface_position_dx);
             let vy = -view_direction_to_camera(world_position + surface_position_dy);
-            let nx = normalize(normal + surface_normal_dx); let ny = normalize(normal + surface_normal_dy);
+            let nx = footprint_neighbor_normal(normal,surface_normal_dx); let ny = footprint_neighbor_normal(normal,surface_normal_dy);
             let rx = refract(vx,nx,1.0/ior); let ry = refract(vy,ny,1.0/ior);
             let tx = select(reflect(vx,nx),rx,any(rx != vec3f(0.0)));
             let ty = select(reflect(vy,ny),ry,any(ry != vec3f(0.0)));

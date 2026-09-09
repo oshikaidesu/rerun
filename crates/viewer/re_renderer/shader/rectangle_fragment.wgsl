@@ -96,7 +96,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     if FILTER_SURFACE_FOOTPRINT {
         let cross_normal = cross(rect_info.extent_u,rect_info.extent_v);
         var n = cross_normal / max(length(cross_normal),1e-6);
-        if dot(n,view_direction_to_camera(in.world_position)) < 0.0 { n = -n; }
         prepare_surface_footprint(in.world_position,n);
     }
     if clip_outside(rect_info.clip_plane, in.world_position) {

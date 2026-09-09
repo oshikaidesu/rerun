@@ -140,7 +140,6 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if FILTER_SURFACE_FOOTPRINT {
         var n = in.footprint_normal / max(length(in.footprint_normal), 1e-20);
         let back = dot(n,view_direction_to_camera(in.footprint_position)) < 0.0;
-        if back { n = -n; }
         if clip.cap == 1u && back && dot(clip.plane.xyz,clip.plane.xyz) > 0.0 { n = normalize(clip.plane.xyz); }
         prepare_surface_footprint(in.footprint_position,n);
     }
