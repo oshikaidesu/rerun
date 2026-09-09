@@ -58,13 +58,13 @@ struct VertexOut {
     @builtin(position)
     position: vec4f,
 
-    @location(0) @interpolate(perspective, centroid)
+    @location(0) @interpolate(perspective, sample)
     color: vec3f, // 0-1 linear space with unmultiplied/separate alpha
 
-    @location(1) @interpolate(perspective, centroid)
+    @location(1) @interpolate(perspective, sample)
     texcoord: vec2f,
 
-    @location(2) @interpolate(perspective, centroid)
+    @location(2) @interpolate(perspective, sample)
     normal_world_space: vec3f,
 
     @location(3) @interpolate(flat)
@@ -76,7 +76,7 @@ struct VertexOut {
     @location(5) @interpolate(flat)
     picking_layer_id: vec4u,
 
-    @location(6) @interpolate(perspective, centroid)
+    @location(6) @interpolate(perspective, sample)
     world_position: vec3f,
 
     @location(7) @interpolate(flat)
