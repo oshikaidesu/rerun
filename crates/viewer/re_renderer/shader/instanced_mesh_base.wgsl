@@ -87,6 +87,11 @@ struct VertexOut {
     params2: vec4f,
     @location(10) @interpolate(flat)
     thickness: f32,
+
+    @location(11) @interpolate(perspective, center)
+    footprint_normal: vec3f,
+    @location(12) @interpolate(perspective, center)
+    footprint_position: vec3f,
 };
 
 @vertex
@@ -124,6 +129,8 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     out.params1 = in_instance.params1;
     out.params2 = in_instance.params2;
     out.thickness = length(in_instance.world_from_mesh_row_0.xyz);
+    out.footprint_normal = out.normal_world_space;
+    out.footprint_position = out.world_position;
 
     return out;
 }
@@ -131,11 +138,11 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
 @fragment
 fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if FILTER_SURFACE_FOOTPRINT {
-        var n = in.normal_world_space / max(length(in.normal_world_space), 1e-6);
-        let back = dot(n,view_direction_to_camera(in.world_position)) < 0.0;
+        var n = in.footprint_normal / max(length(in.footprint_normal), 1e-20);
+        let back = dot(n,view_direction_to_camera(in.footprint_position)) < 0.0;
         if back { n = -n; }
         if clip.cap == 1u && back && dot(clip.plane.xyz,clip.plane.xyz) > 0.0 { n = normalize(clip.plane.xyz); }
-        prepare_surface_footprint(in.world_position,n);
+        prepare_surface_footprint(in.footprint_position,n);
     }
     if clip_outside(clip.plane, in.world_position) {
         discard;
