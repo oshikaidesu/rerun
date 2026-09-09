@@ -124,7 +124,9 @@ fn local_reflection(position: vec3f, direction: vec3f, roughness: f32, origin: v
         let dy = reflection_face_uv(ray_y, directions[face], ups[face]) - uv;
         lod = min(max_lod, max(lod, footprint_lod(dx,dy,vec2f(face_size))));
     }
-    let margin = min(0.49, exp2(ceil(lod)) / face_size);
+    // A continuous guard covers half a texel at both trilinear mip levels.
+    let guard_lod = select(ceil(lod), lod, FILTER_SURFACE_FOOTPRINT);
+    let margin = min(0.49, exp2(guard_lod) / face_size);
     let local = clamp(uv,vec2f(margin),vec2f(1.0-margin));
     let atlas_uv = (local + vec2f(f32(face % 3u),f32(face / 3u) + f32(probe)*2.0)) / vec2f(3,4);
     let captured = textureSampleLevel(scene_reflection, screen_sampler, atlas_uv, lod);
