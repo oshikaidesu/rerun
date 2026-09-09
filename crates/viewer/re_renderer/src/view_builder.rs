@@ -638,7 +638,12 @@ impl ViewBuilder {
             reflection_origin: config
                 .scene_reflection
                 .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.origin.extend(1.0))
+                .map_or(glam::Vec4::ZERO, |r| r.origins[0].extend(r.count as f32))
+                .into(),
+            reflection_origin_second: config
+                .scene_reflection
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |r| r.origins[1].extend(0.0))
                 .into(),
             reflection_min: config
                 .scene_reflection
@@ -925,7 +930,12 @@ impl ViewBuilder {
             reflection_origin: config
                 .scene_reflection
                 .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.origin.extend(1.0))
+                .map_or(glam::Vec4::ZERO, |r| r.origins[0].extend(r.count as f32))
+                .into(),
+            reflection_origin_second: config
+                .scene_reflection
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |r| r.origins[1].extend(0.0))
                 .into(),
             reflection_min: config
                 .scene_reflection

@@ -41,6 +41,7 @@ struct FrameUniformBuffer {
     /// Rotation applied to world directions before the equirectangular lookup.
     environment_from_world: mat3x3f,
     reflection_origin: vec4f,
+    reflection_origin_second: vec4f,
     reflection_min: vec4f,
     reflection_max: vec4f,
 };

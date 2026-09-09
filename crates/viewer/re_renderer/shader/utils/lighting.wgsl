@@ -53,15 +53,13 @@ fn environment_specular_along(world_dir: vec3f, roughness: f32) -> vec3f {
 }
 
 // Box-projected local reflection, as used by reflection probes (Arm / Happy Elements).
-fn scene_specular(position: vec3f, direction: vec3f, roughness: f32) -> vec3f {
-    let fallback = environment_specular_along(direction, roughness);
-    if frame.reflection_origin.w == 0.0 { return fallback; }
+fn local_reflection(position: vec3f, direction: vec3f, roughness: f32, origin: vec3f, probe: u32) -> vec4f {
     var ray = direction;
     if all(position >= frame.reflection_min.xyz) && all(position <= frame.reflection_max.xyz) {
         let safe_dir = select(select(vec3f(-1e-6), vec3f(1e-6), direction >= vec3f(0.0)), direction, abs(direction) > vec3f(1e-6));
         let far = max((frame.reflection_min.xyz - position) / safe_dir, (frame.reflection_max.xyz - position) / safe_dir);
         let distance = min(far.x, min(far.y, far.z));
-        ray = position + direction * distance - frame.reflection_origin.xyz;
+        ray = position + direction * distance - origin;
     }
     let a = abs(ray);
     var face = 0u;
@@ -72,14 +70,26 @@ fn scene_specular(position: vec3f, direction: vec3f, roughness: f32) -> vec3f {
     let ups = array<vec3f, 6>(vec3f(0,-1,0),vec3f(0,-1,0),vec3f(0,0,1),vec3f(0,0,-1),vec3f(0,-1,0),vec3f(0,-1,0));
     let right = cross(directions[face], ups[face]);
     let uv = vec2f(dot(ray, right), -dot(ray, ups[face])) / max(dot(ray,directions[face]),1e-6) * 0.5 + 0.5;
-    let levels = f32(textureNumLevels(scene_reflection));
     // Keep each face at least 4x4 to avoid cross-face mip leakage.
-    let lod = clamp(roughness,0.0,1.0) * max(levels - 4.0, 0.0);
     let face_size = f32(textureDimensions(scene_reflection).x) / 3.0;
+    let lod = clamp(roughness,0.0,1.0) * max(log2(face_size) - 2.0, 0.0);
     let margin = min(0.49, exp2(ceil(lod)) / face_size);
     let local = clamp(uv,vec2f(margin),vec2f(1.0-margin));
-    let atlas_uv = (local + vec2f(f32(face % 3u),f32(face / 3u))) / vec2f(3,2);
+    let atlas_uv = (local + vec2f(f32(face % 3u),f32(face / 3u) + f32(probe)*2.0)) / vec2f(3,4);
     let captured = textureSampleLevel(scene_reflection, screen_sampler, atlas_uv, lod);
+    return captured;
+}
+
+fn scene_specular(position: vec3f, direction: vec3f, roughness: f32) -> vec3f {
+    let fallback = environment_specular_along(direction, roughness);
+    if frame.reflection_origin.w == 0.0 { return fallback; }
+    var captured = local_reflection(position,direction,roughness,frame.reflection_origin.xyz,0u);
+    if frame.reflection_origin.w > 1.0 {
+        let d0 = position-frame.reflection_origin.xyz;
+        let d1 = position-frame.reflection_origin_second.xyz;
+        let weight = smoothstep(0.0,1.0,dot(d0,d0)/max(dot(d0,d0)+dot(d1,d1),1e-6));
+        captured = mix(captured,local_reflection(position,direction,roughness,frame.reflection_origin_second.xyz,1u),weight);
+    }
     return captured.rgb + (1.0-captured.a)*fallback;
 }
 

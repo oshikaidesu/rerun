@@ -26,12 +26,13 @@ pub struct Environment {
     pub strength: f32,
 }
 
-/// Shared local reflection capture. Six faces (+X, -X, +Y, -Y, +Z, -Z) in a 3x2 atlas.
+/// Shared local reflection capture. Up to two sets of six faces (+X, -X, +Y, -Y, +Z, -Z) in a 3x4 atlas.
 /// RGB is linear radiance and alpha is coverage; uncovered directions use the environment.
 #[derive(Clone, Debug)]
 pub struct SceneReflection {
     pub atlas: GpuTexture2D,
-    pub origin: glam::Vec3,
+    pub origins: [glam::Vec3; 2],
+    pub count: u32,
     pub bounds_min: glam::Vec3,
     pub bounds_max: glam::Vec3,
 }

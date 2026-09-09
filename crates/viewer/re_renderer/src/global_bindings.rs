@@ -57,9 +57,10 @@ pub struct FrameUniformBuffer {
     pub environment_from_world: wgpu_buffer_types::Mat3,
 
     pub reflection_origin: wgpu_buffer_types::Vec4,
+    pub reflection_origin_second: wgpu_buffer_types::Vec4,
     pub reflection_min: wgpu_buffer_types::Vec4,
     pub reflection_max: wgpu_buffer_types::Vec4,
-    pub _end_padding: [wgpu_buffer_types::PaddingRow; 10],
+    pub _end_padding: [wgpu_buffer_types::PaddingRow; 9],
 }
 
 /// Global bindings which are always available on bind group 0 for all [`crate::renderer::Renderer`].
