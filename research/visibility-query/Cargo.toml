@@ -1,0 +1,16 @@
+[package]
+name = "visibility-query-research"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[dependencies]
+wgpu = "=29.0.4"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
