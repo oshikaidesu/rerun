@@ -63,18 +63,49 @@ impl MsaaMode {
 ///
 /// For simplicity, we don't allow changing any of these properties without tearing down the [`RenderContext`],
 /// even though it may be possible.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SurfaceSampling {
+    /// Shade each covered pixel once.
+    Pixel,
+    /// Pixel shading with reflection and transmission footprint filtering.
+    FilteredPixel,
+    #[default]
+    /// Shade covered MSAA samples independently on supported devices.
+    Sample,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct RenderConfig {
     pub msaa_mode: MsaaMode,
+    pub surface_sampling: SurfaceSampling,
+    /// Keep discarded, pass-local color/depth attachments transient.
+    pub transient_attachments: bool,
     // TODO(andreas): Add a way to force the render tier?
 }
 
-impl RenderConfig {
-    /// Returns the best config for the given [`DeviceCaps`].
-    pub fn best_for_device_caps(_device_caps: &DeviceCaps) -> Self {
+impl Default for RenderConfig {
+    fn default() -> Self {
         Self {
             msaa_mode: MsaaMode::Msaa4x,
+            surface_sampling: SurfaceSampling::Sample,
+            transient_attachments: true,
         }
+    }
+}
+
+impl RenderConfig {
+    pub(crate) fn discard_attachment_usage(&self) -> wgpu::TextureUsages {
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+            | if self.transient_attachments {
+                wgpu::TextureUsages::TRANSIENT
+            } else {
+                wgpu::TextureUsages::empty()
+            }
+    }
+
+    /// Returns the best config for the given [`DeviceCaps`].
+    pub fn best_for_device_caps(_device_caps: &DeviceCaps) -> Self {
+        Self::default()
     }
 
     /// Render config preferred for running most tests.
@@ -82,10 +113,7 @@ impl RenderConfig {
     /// This is optimized for low discrepancy between devices in order to
     /// to keep image comparison thresholds low.
     pub fn testing() -> Self {
-        Self {
-            // we use "testing" also for generating nice looking screenshots
-            msaa_mode: MsaaMode::Msaa4x,
-        }
+        Self::default()
     }
 }
 

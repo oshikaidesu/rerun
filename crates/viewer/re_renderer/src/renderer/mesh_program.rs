@@ -147,7 +147,7 @@ impl SurfaceProgram {
             &ShaderModuleDesc {
                 label: format!("SurfaceProgram::rectangle::{}", program.desc.label).into(),
                 source: path,
-                extra_workaround_replacements: Vec::new(),
+                extra_workaround_replacements: surface_sampling_replacements(ctx),
             },
         );
         let opaque = RenderPipelineDesc {
@@ -188,17 +188,7 @@ impl SurfaceProgram {
             &ShaderModuleDesc {
                 label: Label::from(format!("SurfaceProgram::{}", desc.label)),
                 source: path,
-                extra_workaround_replacements: if ctx.device_caps().tier
-                    == crate::device_caps::DeviceCapabilityTier::Limited
-                    || ctx.render_config().msaa_mode == crate::MsaaMode::Off
-                {
-                    vec![(
-                        "@interpolate(perspective, sample)".into(),
-                        "@interpolate(perspective, centroid)".into(),
-                    )]
-                } else {
-                    Vec::new()
-                },
+                extra_workaround_replacements: surface_sampling_replacements(ctx),
             },
         );
         let render_pipelines = &ctx.gpu_resources.render_pipelines;
@@ -346,3 +336,24 @@ impl SurfaceProgram {
 /// Compatibility names for mesh-only callers.
 pub type MeshProgram = SurfaceProgram;
 pub type MeshProgramDesc = SurfaceProgramDesc;
+
+fn surface_sampling_replacements(ctx: &RenderContext) -> Vec<(String, String)> {
+    let mut replacements = Vec::new();
+    let full = ctx.device_caps().tier != crate::device_caps::DeviceCapabilityTier::Limited;
+    if !full
+        || ctx.render_config().msaa_mode == crate::MsaaMode::Off
+        || ctx.render_config().surface_sampling != crate::SurfaceSampling::Sample
+    {
+        replacements.push((
+            "@interpolate(perspective, sample)".into(),
+            "@interpolate(perspective, centroid)".into(),
+        ));
+    }
+    if full && ctx.render_config().surface_sampling == crate::SurfaceSampling::FilteredPixel {
+        replacements.push((
+            "const FILTER_SURFACE_FOOTPRINT: bool = false;".into(),
+            "const FILTER_SURFACE_FOOTPRINT: bool = true;".into(),
+        ));
+    }
+    replacements
+}

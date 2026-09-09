@@ -33,9 +33,9 @@ mod allocator;
 pub mod clip;
 pub mod device_caps;
 pub mod environment;
-pub mod noise;
 pub mod importer;
 pub mod mesh;
+pub mod noise;
 pub mod renderer;
 pub mod resource_managers;
 pub mod texture_info;
@@ -87,7 +87,8 @@ pub use colormap::{
     grayscale_srgba,
 };
 pub use context::{
-    MsaaMode, RenderConfig, RenderContext, RenderContextError, RendererTypeId, adapter_info_summary,
+    MsaaMode, RenderConfig, RenderContext, RenderContextError, RendererTypeId, SurfaceSampling,
+    adapter_info_summary,
 };
 pub use depth_offset::DepthOffset;
 pub use draw_phases::{
@@ -99,8 +100,8 @@ pub use label::Label;
 pub use resource_managers::AlphaChannelUsage;
 pub use texture_readback::{TextureReadback, poll_read_texture, schedule_read_texture};
 // Re-export used color types directly.
-pub use ecolor::{Color32, Hsva, Rgba};
 pub use clip::ClipPlane;
+pub use ecolor::{Color32, Hsva, Rgba};
 pub use environment::Environment;
 pub use global_bindings::GlobalBindings;
 pub use importer::{CpuModel, CpuModelMeshKey};

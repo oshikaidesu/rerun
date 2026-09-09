@@ -130,6 +130,13 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
 
 @fragment
 fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
+    if FILTER_SURFACE_FOOTPRINT {
+        var n = in.normal_world_space / max(length(in.normal_world_space), 1e-6);
+        let back = dot(n,view_direction_to_camera(in.world_position)) < 0.0;
+        if back { n = -n; }
+        if clip.cap == 1u && back && dot(clip.plane.xyz,clip.plane.xyz) > 0.0 { n = normalize(clip.plane.xyz); }
+        prepare_surface_footprint(in.world_position,n);
+    }
     if clip_outside(clip.plane, in.world_position) {
         discard;
     }

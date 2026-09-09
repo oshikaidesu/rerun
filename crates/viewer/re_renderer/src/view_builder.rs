@@ -507,7 +507,7 @@ impl ViewBuilder {
                 format: Self::MAIN_TARGET_COLOR_FORMAT,
                 usage: if msaa_enabled {
                     // If MSAA is enabled, we don't read this texture ourselves as it is only used for resolve.
-                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                    render_cfg.discard_attachment_usage()
                 } else {
                     wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
                 },
@@ -543,7 +543,7 @@ impl ViewBuilder {
                 sample_count: render_cfg.msaa_mode.sample_count(),
                 dimension: wgpu::TextureDimension::D2,
                 format: Self::MAIN_TARGET_DEPTH_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: render_cfg.discard_attachment_usage(),
             },
         );
 
@@ -841,7 +841,7 @@ impl ViewBuilder {
                     sample_count: render_cfg.msaa_mode.sample_count(),
                     dimension: wgpu::TextureDimension::D2,
                     format: Self::MAIN_TARGET_COLOR_FORMAT,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    usage: render_cfg.discard_attachment_usage(),
                 },
             )
         } else {
@@ -857,7 +857,7 @@ impl ViewBuilder {
                 sample_count: render_cfg.msaa_mode.sample_count(),
                 dimension: wgpu::TextureDimension::D2,
                 format: Self::MAIN_TARGET_DEPTH_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: render_cfg.discard_attachment_usage(),
             },
         );
 
