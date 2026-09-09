@@ -13,13 +13,16 @@ use smallvec::smallvec;
 use super::mesh_program::{MeshProgram, MeshProgramDesc};
 use super::{DrawData, DrawError, RenderContext, Renderer};
 use crate::draw_phases::DrawPhase;
-use crate::mesh::gpu_data::MaterialUniformBuffer;
 use crate::mesh::GpuMesh;
+use crate::mesh::gpu_data::MaterialUniformBuffer;
 use crate::renderer::{DrawDataDrawable, DrawInstruction, DrawableCollectionViewInfo};
 use crate::wgpu_resources::{
-    BindGroupDesc, BindGroupLayoutDesc, BufferDesc, GpuBindGroup, GpuBindGroupLayoutHandle, GpuBuffer, GpuPipelineLayoutHandle, GpuRenderPipelinePoolAccessor, PipelineLayoutDesc,
+    BindGroupDesc, BindGroupLayoutDesc, BufferDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
+    GpuBuffer, GpuPipelineLayoutHandle, GpuRenderPipelinePoolAccessor, PipelineLayoutDesc,
 };
-use crate::{Color32, CpuWriteGpuReadError, DrawableCollector, OutlineMaskPreference, PickingLayerId};
+use crate::{
+    Color32, CpuWriteGpuReadError, DrawableCollector, OutlineMaskPreference, PickingLayerId,
+};
 
 pub(super) mod gpu_data {
     use ecolor::Color32;
@@ -127,6 +130,7 @@ pub struct MeshDrawData {
     batches: Vec<MeshBatch>,
     /// World-space cut for every instance of this draw data (group 2).
     clip_bind_group: Option<GpuBindGroup>,
+    source_instances: Arc<[(usize, glam::Vec3A)]>,
 }
 
 mod clip_gpu_data {
@@ -274,6 +278,7 @@ impl MeshDrawData {
                 batches: Vec::new(),
                 instance_buffer: None,
                 clip_bind_group: None,
+                source_instances: Arc::from([]),
             });
         }
 
@@ -283,7 +288,11 @@ impl MeshDrawData {
                 cap: u32::from(clip.cap).into(),
                 _end_padding: Default::default(),
             };
-            let binding = crate::allocator::create_and_fill_uniform_buffer(ctx, "MeshDrawData::clip".into(), uniform);
+            let binding = crate::allocator::create_and_fill_uniform_buffer(
+                ctx,
+                "MeshDrawData::clip".into(),
+                uniform,
+            );
             ctx.gpu_resources.bind_groups.alloc(
                 &ctx.device,
                 &ctx.gpu_resources,
@@ -316,18 +325,22 @@ impl MeshDrawData {
         // but since it uses the pointer address as part of the key,
         // it will still change if we run the app multiple times.
         let mut instances_by_batch_key: BTreeMap<BatchKey, Vec<_>> = BTreeMap::new();
-        for instance in instances {
+        for (source_index, instance) in instances.iter().enumerate() {
             instances_by_batch_key
                 .entry(BatchKey {
                     mesh_ptr: Arc::as_ptr(&instance.gpu_mesh),
                     cull_mode: instance.cull_mode,
-                    program_ptr: instance.program.as_ref().map_or(std::ptr::null(), Arc::as_ptr),
+                    program_ptr: instance
+                        .program
+                        .as_ref()
+                        .map_or(std::ptr::null(), Arc::as_ptr),
                 })
                 .or_insert_with(|| Vec::with_capacity(instances.len()))
-                .push((instance, EnumSet::<DrawPhase>::new())); // Draw phase is filled out later.
+                .push((source_index, instance, EnumSet::<DrawPhase>::new())); // Draw phase is filled out later.
         }
 
         let mut batches = Vec::new();
+        let mut source_instances = Vec::with_capacity(instances.len());
         {
             let mut instance_buffer_staging = ctx
                 .cpu_write_gpu_read_belt
@@ -343,7 +356,7 @@ impl MeshDrawData {
                 let Some(first_instance) = instances.first() else {
                     continue;
                 };
-                let first_instance = first_instance.0;
+                let first_instance = first_instance.1;
                 let mesh = first_instance.gpu_mesh.clone();
                 let program = first_instance.program.clone();
                 let mesh_center = glam::Vec3A::from(mesh.bbox.center());
@@ -360,17 +373,21 @@ impl MeshDrawData {
 
                 // Any instances participating in the opaque & outline mask drawphases can be batched together.
                 // For that, we need continuous runs, ideally all of the instances together in a single run.
-                for (instance, phases) in &mut instances {
+                for (_, instance, phases) in &mut instances {
                     *phases = instance_draw_phases(
                         instance,
                         any_material_transparent,
                         all_materials_transparent,
                     );
                 }
-                instances.sort_by_key(|(_instance, phases)| *phases);
+                instances.sort_by_key(|(_, _instance, phases)| *phases);
 
                 // Add the instances to the instance buffer.
-                for (i, (instance, phases)) in instances.iter().enumerate() {
+                for (i, (source_index, instance, phases)) in instances.iter().enumerate() {
+                    source_instances.push((
+                        *source_index,
+                        instance.world_from_mesh.transform_point3a(mesh_center),
+                    ));
                     let world_from_mesh_mat3 = instance.world_from_mesh.matrix3;
                     // If the matrix is not invertible the draw result is likely invalid as well.
                     // However, at this point it's really hard to bail out!
@@ -404,9 +421,24 @@ impl MeshDrawData {
                             .map_or([0, 0, 0, 0], |mask| [mask[0], mask[1], 0, 0]),
                         picking_layer_id: instance.picking_layer_id.into(),
                         params: [
-                            [instance.params[0], instance.params[1], instance.params[2], instance.params[3]],
-                            [instance.params[4], instance.params[5], instance.params[6], instance.params[7]],
-                            [instance.params[8], instance.params[9], instance.params[10], instance.params[11]],
+                            [
+                                instance.params[0],
+                                instance.params[1],
+                                instance.params[2],
+                                instance.params[3],
+                            ],
+                            [
+                                instance.params[4],
+                                instance.params[5],
+                                instance.params[6],
+                                instance.params[7],
+                            ],
+                            [
+                                instance.params[8],
+                                instance.params[9],
+                                instance.params[10],
+                                instance.params[11],
+                            ],
                         ],
                     })?;
 
@@ -430,12 +462,12 @@ impl MeshDrawData {
                 for phase in [DrawPhase::Opaque, DrawPhase::OutlineMask] {
                     let mut instance_start = num_processed_instances;
 
-                    for chunk in instances.chunk_by(|(_, phases_a), (_, phases_b)| {
+                    for chunk in instances.chunk_by(|(_, _, phases_a), (_, _, phases_b)| {
                         phases_a.contains(phase) == phases_b.contains(phase)
                     }) {
                         let num_instances = chunk.len() as u32;
 
-                        if chunk[0].1.contains(phase) {
+                        if chunk[0].2.contains(phase) {
                             batches.push(MeshBatch {
                                 mesh: mesh.clone(),
                                 instance_range: instance_start..(instance_start + num_instances),
@@ -443,7 +475,7 @@ impl MeshDrawData {
                                 has_transparent_tint: false,
                                 cull_mode: batch_key.cull_mode,
                                 // Ordering isn't super important, so for many instances just pick the first as representative.
-                                position: chunk[0].0.world_from_mesh.transform_point3a(mesh_center),
+                                position: chunk[0].1.world_from_mesh.transform_point3a(mesh_center),
                                 program: program.clone(),
                             });
                         }
@@ -482,7 +514,40 @@ impl MeshDrawData {
             batches,
             instance_buffer: Some(instance_buffer),
             clip_bind_group: Some(clip_bind_group),
+            source_instances: source_instances.into(),
         })
+    }
+}
+
+impl MeshDrawData {
+    /// Select original input instances without rebuilding or uploading the GPU buffer.
+    /// The predicate uses the index in the slice passed to `new_clipped`.
+    pub fn select_source_instances(&self, include: impl Fn(usize) -> bool) -> Self {
+        let mut batches = Vec::new();
+        for batch in &self.batches {
+            let selected = |packed: u32| include(self.source_instances[packed as usize].0);
+            let Some(first) = batch.instance_range.clone().find(|&i| selected(i)) else {
+                continue;
+            };
+            let position = self.source_instances[first as usize].1;
+            let mut start = None;
+            for i in batch.instance_range.start..=batch.instance_range.end {
+                if i < batch.instance_range.end && selected(i) {
+                    start.get_or_insert(i);
+                } else if let Some(begin) = start.take() {
+                    let mut subset = batch.clone();
+                    subset.instance_range = begin..i;
+                    subset.position = position;
+                    batches.push(subset);
+                }
+            }
+        }
+        Self {
+            instance_buffer: self.instance_buffer.clone(),
+            clip_bind_group: self.clip_bind_group.clone(),
+            source_instances: self.source_instances.clone(),
+            batches,
+        }
     }
 }
 
@@ -540,7 +605,8 @@ impl Renderer for MeshRenderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: (std::mem::size_of::<clip_gpu_data::ClipUniformBuffer>() as u64)
+                        min_binding_size: (std::mem::size_of::<clip_gpu_data::ClipUniformBuffer>()
+                            as u64)
                             .try_into()
                             .ok(),
                     },
@@ -552,12 +618,24 @@ impl Renderer for MeshRenderer {
             ctx,
             &PipelineLayoutDesc {
                 label: "MeshRenderer::pipeline_layout".into(),
-                entries: vec![ctx.global_bindings.layout, bind_group_layout, clip_bind_group_layout],
+                entries: vec![
+                    ctx.global_bindings.layout,
+                    bind_group_layout,
+                    clip_bind_group_layout,
+                ],
             },
         );
 
-        let default_program = MeshProgram::with_layout(ctx, pipeline_layout, MeshProgramDesc { label: "default".into(), field: None, surface: None })
-            .expect("the default mesh program composes from embedded shaders");
+        let default_program = MeshProgram::with_layout(
+            ctx,
+            pipeline_layout,
+            MeshProgramDesc {
+                label: "default".into(),
+                field: None,
+                surface: None,
+            },
+        )
+        .expect("the default mesh program composes from embedded shaders");
 
         Self {
             default_program: Arc::new(default_program),
@@ -628,7 +706,10 @@ impl Renderer for MeshRenderer {
                     wgpu::IndexFormat::Uint32,
                 );
 
-                let program: &MeshProgram = mesh_batch.program.as_deref().unwrap_or(&self.default_program);
+                let program: &MeshProgram = mesh_batch
+                    .program
+                    .as_deref()
+                    .unwrap_or(&self.default_program);
 
                 // Set per-batch pipeline based on cull mode.
                 // For the transparent phase this is done per-material below.
@@ -636,7 +717,9 @@ impl Renderer for MeshRenderer {
                     let pipeline = match (phase, mesh_batch.cull_mode) {
                         (DrawPhase::Opaque, None) => program.rp_shaded,
                         (DrawPhase::Opaque, Some(wgpu::Face::Back)) => program.rp_shaded_cull_back,
-                        (DrawPhase::Opaque, Some(wgpu::Face::Front)) => program.rp_shaded_cull_front,
+                        (DrawPhase::Opaque, Some(wgpu::Face::Front)) => {
+                            program.rp_shaded_cull_front
+                        }
                         (DrawPhase::PickingLayer, None) => program.rp_picking_layer,
                         (DrawPhase::PickingLayer, Some(wgpu::Face::Back)) => {
                             program.rp_picking_layer_cull_back
@@ -684,13 +767,15 @@ impl Renderer for MeshRenderer {
                                 pass.draw_indexed(indices.clone(), 0, instances.clone());
 
                                 pass.set_pipeline(
-                                    render_pipelines.get(program.rp_shaded_alpha_blended_cull_back)?,
+                                    render_pipelines
+                                        .get(program.rp_shaded_alpha_blended_cull_back)?,
                                 );
                                 pass.draw_indexed(indices, 0, instances);
                             }
                             Some(wgpu::Face::Back) => {
                                 pass.set_pipeline(
-                                    render_pipelines.get(program.rp_shaded_alpha_blended_cull_back)?,
+                                    render_pipelines
+                                        .get(program.rp_shaded_alpha_blended_cull_back)?,
                                 );
                                 pass.draw_indexed(indices, 0, instances);
                             }
