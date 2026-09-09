@@ -188,7 +188,17 @@ impl SurfaceProgram {
             &ShaderModuleDesc {
                 label: Label::from(format!("SurfaceProgram::{}", desc.label)),
                 source: path,
-                extra_workaround_replacements: Vec::new(),
+                extra_workaround_replacements: if ctx.device_caps().tier
+                    == crate::device_caps::DeviceCapabilityTier::Limited
+                    || ctx.render_config().msaa_mode == crate::MsaaMode::Off
+                {
+                    vec![(
+                        "@interpolate(perspective, sample)".into(),
+                        "@interpolate(perspective, centroid)".into(),
+                    )]
+                } else {
+                    Vec::new()
+                },
             },
         );
         let render_pipelines = &ctx.gpu_resources.render_pipelines;
