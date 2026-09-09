@@ -25,10 +25,14 @@ fn footprint_lod(dx: vec2f, dy: vec2f, size: vec2f) -> f32 {
 }
 
 fn projected_reflection_ray(position: vec3f, direction: vec3f, origin: vec3f) -> vec3f {
-    if all(position >= frame.reflection_min.xyz) && all(position <= frame.reflection_max.xyz) {
+    var anchor = position;
+    if frame.reflection_origin_second.w > 0.0 {
+        anchor = clamp(position, frame.reflection_min.xyz, frame.reflection_max.xyz);
+    }
+    if all(anchor >= frame.reflection_min.xyz) && all(anchor <= frame.reflection_max.xyz) {
         let safe_dir = select(select(vec3f(-1e-6), vec3f(1e-6), direction >= vec3f(0.0)), direction, abs(direction) > vec3f(1e-6));
-        let far = max((frame.reflection_min.xyz - position) / safe_dir, (frame.reflection_max.xyz - position) / safe_dir);
-        return position + direction * min(far.x, min(far.y, far.z)) - origin;
+        let far = max((frame.reflection_min.xyz - anchor) / safe_dir, (frame.reflection_max.xyz - anchor) / safe_dir);
+        return anchor + direction * min(far.x, min(far.y, far.z)) - origin;
     }
     return direction;
 }
@@ -151,7 +155,7 @@ fn reflection_influence(position: vec3f, origin: vec3f, radius: f32) -> f32 {
     let radial = 1.0 - smoothstep(radius, 2.0 * radius, distance(position, origin));
     let border = min(position - frame.reflection_min.xyz, frame.reflection_max.xyz - position);
     let fade = max((frame.reflection_max.xyz - frame.reflection_min.xyz) * 0.05, vec3f(1e-4));
-    let box_weight = smoothstep(vec3f(0.0), fade, border);
+    let box_weight = vec3f(1.0) - smoothstep(vec3f(0.0), fade, max(-border, vec3f(0.0)));
     return radial * min(box_weight.x, min(box_weight.y, box_weight.z));
 }
 
@@ -163,7 +167,11 @@ fn scene_specular(position: vec3f, direction: vec3f, roughness: f32) -> vec3f {
     if frame.reflection_origin.w > 1.0 {
         let d0 = position-frame.reflection_origin.xyz;
         let d1 = position-frame.reflection_origin_second.xyz;
-        let weight = smoothstep(0.0,1.0,dot(d0,d0)/max(dot(d0,d0)+dot(d1,d1),1e-6));
+        var ratio = dot(d0,d0)/max(dot(d0,d0)+dot(d1,d1),1e-6);
+        if frame.reflection_origin_second.w > 0.0 {
+            ratio = (dot(d0,d0) + 0.5e-6) / (dot(d0,d0) + dot(d1,d1) + 1e-6);
+        }
+        let weight = smoothstep(0.0,1.0,ratio);
         let w1 = reflection_influence(position, frame.reflection_origin_second.xyz, frame.reflection_min.w);
         captured = mix(captured,local_reflection(position,direction,roughness,frame.reflection_origin_second.xyz,1u) * w1,weight);
     }
