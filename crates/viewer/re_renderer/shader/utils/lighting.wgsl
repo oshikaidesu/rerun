@@ -99,6 +99,19 @@ fn environment_specular_along(world_dir: vec3f, roughness: f32) -> vec3f {
         dx.x -= round(dx.x); dy.x -= round(dy.x);
         lod = min(levels-1.0, max(lod, footprint_lod(dx,dy,vec2f(textureDimensions(environment_radiance)))));
     }
+    if FILTER_SURFACE_FOOTPRINT {
+        // Bright HDR texels must not dominate a footprint before display clamping (Karis / Lottes).
+        let offsets = array<vec2f,4>(vec2f(-0.125,-0.375),vec2f(0.375,-0.125),vec2f(-0.375,0.125),vec2f(0.125,0.375));
+        var weighted = vec3f(0.0); var weights = 0.0;
+        for (var i=0u; i<4u; i+=1u) {
+            let ray = world_dir + surface_ray_dx * offsets[i].x + surface_ray_dy * offsets[i].y;
+            let sample_uv = equirect_uv_from_direction(environment_direction(ray));
+            let radiance = textureSampleLevel(environment_radiance,equirect_sampler,sample_uv,lod).rgb * frame.environment_strength;
+            let weight = 1.0 / (1.0 + max(0.0,max(radiance.x,max(radiance.y,radiance.z))));
+            weighted += radiance * weight; weights += weight;
+        }
+        return weighted / max(weights,1e-6);
+    }
     return textureSampleLevel(environment_radiance, equirect_sampler, uv, lod).rgb * frame.environment_strength;
 }
 
