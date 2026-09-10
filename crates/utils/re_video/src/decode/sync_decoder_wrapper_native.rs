@@ -45,6 +45,9 @@ pub struct SyncDecoderWrapper {
 
     /// Instant communication to the decoder thread (circumventing the command queue).
     comms: Comms,
+
+    /// Forwarded from the wrapped decoder.
+    min_num_samples_to_enqueue_ahead: usize,
 }
 
 impl SyncDecoderWrapper {
@@ -57,6 +60,7 @@ impl SyncDecoderWrapper {
 
         let (command_tx, command_rx) = crate::channel(format!("{debug_name}-channel"));
         let comms = Comms::default();
+        let min_num_samples_to_enqueue_ahead = sync_decoder.min_num_samples_to_enqueue_ahead();
 
         let thread = std::thread::Builder::new()
             .name(format!("decoder of {debug_name}"))
@@ -75,11 +79,16 @@ impl SyncDecoderWrapper {
             _thread: thread,
             command_tx,
             comms,
+            min_num_samples_to_enqueue_ahead,
         }
     }
 }
 
 impl AsyncDecoder for SyncDecoderWrapper {
+    fn min_num_samples_to_enqueue_ahead(&self) -> usize {
+        self.min_num_samples_to_enqueue_ahead
+    }
+
     // NOTE: The interface is all `&mut self` to avoid certain types of races.
     fn submit_chunk(&mut self, chunk: Chunk) -> Result<()> {
         re_tracing::profile_function!();

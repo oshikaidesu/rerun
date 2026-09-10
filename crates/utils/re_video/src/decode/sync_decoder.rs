@@ -15,4 +15,9 @@ pub trait SyncDecoder {
 
     /// Clear and reset everything
     fn reset(&mut self, video_data_description: &VideoDataDescription);
+
+    /// See [`crate::decode::AsyncDecoder::min_num_samples_to_enqueue_ahead`].
+    fn min_num_samples_to_enqueue_ahead(&self) -> usize {
+        0
+    }
 }

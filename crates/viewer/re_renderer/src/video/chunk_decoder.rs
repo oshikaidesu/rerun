@@ -237,6 +237,7 @@ fn copy_decoded_video_frame_to_texture(
                 re_video::YuvPixelLayout::Y_U_V444 => YuvPixelLayout::Y_U_V444,
                 re_video::YuvPixelLayout::Y_U_V422 => YuvPixelLayout::Y_U_V422,
                 re_video::YuvPixelLayout::Y_U_V420 => YuvPixelLayout::Y_U_V420,
+                re_video::YuvPixelLayout::Y_UV420 => YuvPixelLayout::Y_UV420,
                 re_video::YuvPixelLayout::Y400 => YuvPixelLayout::Y400,
             },
             coefficients: match coefficients {

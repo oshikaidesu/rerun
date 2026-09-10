@@ -94,6 +94,9 @@ mod ffmpeg_cli;
 #[cfg(feature = "openh264")]
 mod openh264_decoder;
 
+#[cfg(feature = "lavc")]
+mod lavc;
+
 #[cfg(with_ffmpeg)]
 pub use ffmpeg_cli::FFmpegCliDecoder;
 #[cfg(with_ffmpeg)]
@@ -161,6 +164,9 @@ pub enum DecodeError {
 
     #[error("openh264: {0}")]
     OpenH264(#[size_bytes(ignore)] String),
+
+    #[error("libavcodec: {0}")]
+    Lavc(#[size_bytes(ignore)] String),
 }
 
 impl DecodeError {
@@ -193,7 +199,7 @@ impl DecodeError {
             Self::BadBitsPerComponent(_) => false,
 
             // openh264 refused a chunk or failed to start; the next keyframe usually recovers.
-            Self::OpenH264(_) => true,
+            Self::OpenH264(_) | Self::Lavc(_) => true,
         }
     }
 
@@ -210,7 +216,7 @@ impl DecodeError {
             Self::WebDecoder(err) => err.severity(),
             #[cfg(with_ffmpeg)]
             Self::Ffmpeg(_) => VideoPlaybackIssueSeverity::Error,
-            Self::OpenH264(_) => VideoPlaybackIssueSeverity::Error,
+            Self::OpenH264(_) | Self::Lavc(_) => VideoPlaybackIssueSeverity::Error,
 
             Self::UnsupportedCodec(_)
             | Self::Dav1dWithoutNasm
@@ -330,6 +336,26 @@ pub fn new_decoder(
                     output_sender,
                 )));
             }
+        }
+
+        #[cfg(feature = "lavc")]
+        crate::VideoCodec::H264
+        | crate::VideoCodec::H265
+        | crate::VideoCodec::VP8
+        | crate::VideoCodec::VP9
+            if decode_settings.in_process =>
+        {
+            re_log::trace!("Decoding in-process with libavcodec…");
+            Ok(Box::new(sync_decoder_wrapper::SyncDecoderWrapper::new(
+                debug_name.to_owned(),
+                Box::new(lavc::LavcDecoder::new(
+                    debug_name.to_owned(),
+                    video,
+                    decode_settings.hw_acceleration,
+                    decode_settings.source_yuv,
+                )?),
+                output_sender,
+            )))
         }
 
         #[cfg(feature = "openh264")]
@@ -601,7 +627,7 @@ impl PixelFormat {
             Self::Yuv { layout, .. } => match layout {
                 YuvPixelLayout::Y_U_V444 => 24,
                 YuvPixelLayout::Y_U_V422 => 16,
-                YuvPixelLayout::Y_U_V420 => 12,
+                YuvPixelLayout::Y_U_V420 | YuvPixelLayout::Y_UV420 => 12,
                 YuvPixelLayout::Y400 => 8,
             },
         }
@@ -617,6 +643,8 @@ pub enum YuvPixelLayout {
     Y_U_V444,
     Y_U_V422,
     Y_U_V420,
+    /// Semi-planar 4:2:0 (NV12): one Y plane, one interleaved UV plane.
+    Y_UV420,
     Y400,
 }
 

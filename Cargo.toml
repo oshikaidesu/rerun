@@ -55,6 +55,7 @@ ignored-paths = [
 
 [workspace.dependencies]
 openh264 = "0.9"
+ffmpeg-next = "7.1"
 # When using alpha-release, always use exact version, e.g. `version = "=0.x.y-alpha.z"
 # This is because we treat alpha-releases as incompatible, but semver doesn't.
 # In particular: if we compile rerun 0.3.0-alpha.0 we only want it to use
