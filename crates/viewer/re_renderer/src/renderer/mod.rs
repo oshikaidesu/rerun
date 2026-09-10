@@ -3,6 +3,7 @@ mod debug_overlay;
 mod depth_cloud;
 mod generic_skybox;
 mod lines;
+mod paths;
 mod mesh_program;
 mod mesh_renderer;
 mod plane_clustering;
@@ -15,6 +16,10 @@ mod world_grid;
 pub use debug_overlay::{DebugOverlayDrawData, DebugOverlayError, DebugOverlayRenderer};
 pub use generic_skybox::{GenericSkyboxDrawData, GenericSkyboxType};
 pub use lines::{LineBatchInfo, LineDrawData, LineDrawDataError, LineStripFlags};
+pub use paths::{
+    PathContour, PathDrawData, PathDrawDataBuilder, PathFillRule, PathLineCap, PathLineJoin,
+    PathRenderer, PathStroke, PathVertex,
+};
 pub use mesh_program::{
     DEFAULT_FIELD, DEFAULT_SURFACE, MeshProgram, MeshProgramDesc, SurfaceProgram,
     SurfaceProgramDesc, compose_source as compose_mesh_program_source,

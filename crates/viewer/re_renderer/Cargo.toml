@@ -72,6 +72,8 @@ enumset.workspace = true
 glam = { workspace = true, features = ["bytemuck"] }
 half = { workspace = true, features = ["bytemuck"] }
 itertools.workspace = true
+lyon_algorithms.workspace = true
+lyon_tessellation.workspace = true
 macaw.workspace = true
 never.workspace = true
 ordered-float.workspace = true
