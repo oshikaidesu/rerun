@@ -159,6 +159,8 @@ pub struct LavcDecoder {
     frame: ff::util::frame::Video,
     sw_frame: ff::util::frame::Video,
     threads_ahead: usize,
+    /// EOF was sent; the decoder must be reopened before it takes packets again.
+    drained: bool,
 }
 
 impl LavcDecoder {
@@ -186,7 +188,19 @@ impl LavcDecoder {
             frame: ff::util::frame::Video::empty(),
             sw_frame: ff::util::frame::Video::empty(),
             threads_ahead: std::thread::available_parallelism().map_or(4, |n| n.get()).min(8),
+            drained: false,
         })
+    }
+
+    fn reopen(&mut self) {
+        match open_decoder(&self.codec, self.hw) {
+            Ok((decoder, hw_used)) => {
+                self.decoder = decoder;
+                self.hw_used = hw_used;
+            }
+            Err(err) => re_log::warn_once!("{}: could not reopen libavcodec decoder: {err}", self.debug_name),
+        }
+        self.drained = false;
     }
 
     pub fn min_num_samples_ahead(&self) -> usize {
@@ -314,6 +328,11 @@ impl SyncDecoder for LavcDecoder {
     ) {
         re_tracing::profile_function!();
 
+        if self.drained {
+            self.reopen();
+        }
+        re_tracing::profile_function!();
+
         if let Err(err) = self.bitstream.write(&mut self.packet_buffer, &chunk) {
             output_sender.send(Err(err)).ok();
             return;
@@ -357,15 +376,17 @@ impl SyncDecoder for LavcDecoder {
 
     fn reset(&mut self, video: &VideoDataDescription) {
         re_tracing::profile_function!();
-        match open_decoder(&self.codec, self.hw) {
-            Ok((decoder, hw_used)) => {
-                self.decoder = decoder;
-                self.hw_used = hw_used;
-            }
-            Err(err) => re_log::warn_once!("{}: could not reopen libavcodec decoder: {err}", self.debug_name),
-        }
+        self.reopen();
         self.bitstream = Bitstream::for_video(video);
         self.pending.clear();
+    }
+
+    fn end_of_video(&mut self, output_sender: &Sender<FrameResult>) {
+        re_tracing::profile_function!();
+        if self.decoder.send_eof().is_ok() {
+            self.drain(output_sender);
+        }
+        self.drained = true;
     }
 
     fn min_num_samples_to_enqueue_ahead(&self) -> usize {

@@ -20,4 +20,7 @@ pub trait SyncDecoder {
     fn min_num_samples_to_enqueue_ahead(&self) -> usize {
         0
     }
+
+    /// See [`crate::decode::AsyncDecoder::end_of_video`]: flush what the decoder still holds.
+    fn end_of_video(&mut self, _output_sender: &Sender<FrameResult>) {}
 }
