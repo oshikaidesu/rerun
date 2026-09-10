@@ -195,12 +195,24 @@ fn env_brdf_approx(f0: vec3f, roughness: f32, n_dot_v: f32) -> vec3f {
     return f0 * ab.x + ab.y;
 }
 
+/// What is drawn behind the surface, seen where a ray refracted at `ior` leaves a slab of `thickness`;
+/// the environment where nothing is drawn.
+fn transmitted_backdrop(view_dir: vec3f, normal: vec3f, reflected: vec3f, world_position: vec3f, thickness: f32, ior: f32, roughness: f32, lod: f32) -> vec3f {
+    let refracted = refract(-view_dir, normal, 1.0 / ior);
+    let through = select(reflected, refracted, any(refracted != vec3f(0.0)));
+    let uv = clamp(projected_surface_uv(world_position + through * thickness), vec2f(0.0), vec2f(1.0));
+    let behind = textureSampleLevel(backdrop_texture, screen_sampler, uv, lod);
+    return behind.rgb + (1.0 - behind.a) * environment_specular_along(through, roughness);
+}
+
 /// Radiance leaving a surface: Lambert diffuse from the irradiance map, glossy reflection from the
 /// radiance mip chain (split-sum), and for transmissive surfaces the refracted see-through of what
 /// is drawn behind (the backdrop, read where the refracted ray leaves a slab of `thickness`; vgpu's
 /// transmission example) with the environment where nothing is drawn.
 /// `surface` = (roughness, metallic, transmission, ior). Without an environment, the fixed lights apply.
-fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: vec3f, thickness: f32, surface: vec4f) -> vec3f {
+/// `dispersion` is KHR_materials_dispersion's 20 / Abbe number, read the way three.js does: the IOR
+/// spreads by `(ior - 1) * 0.025 * dispersion` to either side and red / blue refract on their own.
+fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: vec3f, thickness: f32, surface: vec4f, dispersion: f32) -> vec3f {
     let roughness = clamp(surface.x, 0.0, 1.0);
     let metallic = clamp(surface.y, 0.0, 1.0);
     let transmission = clamp(surface.z, 0.0, 1.0);
@@ -228,7 +240,6 @@ fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: 
         let through = select(reflected, refracted, any(refracted != vec3f(0.0)));
         let exit = world_position + through * thickness;
         let projected_uv = projected_surface_uv(exit);
-        let uv = clamp(projected_uv, vec2f(0.0), vec2f(1.0));
         let levels = f32(textureNumLevels(backdrop_texture));
         var lod = pow(roughness, 0.8) * max(levels - 1.0, 0.0) * 0.55;
         if FILTER_SURFACE_FOOTPRINT {
@@ -243,8 +254,15 @@ fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: 
             let dy = projected_surface_uv(world_position + surface_position_dy + ty*thickness) - projected_uv;
             lod = min(levels-1.0,max(lod,footprint_lod(dx,dy,vec2f(textureDimensions(backdrop_texture)))));
         }
-        let behind = textureSampleLevel(backdrop_texture, screen_sampler, uv, lod);
-        let seen = behind.rgb + (1.0 - behind.a) * environment_specular_along(through, roughness);
+        let half_spread = (ior - 1.0) * 0.025 * max(dispersion, 0.0);
+        var seen = transmitted_backdrop(view_dir, normal, reflected, world_position, thickness, ior, roughness, lod);
+        if half_spread > 0.0 {
+            seen = vec3f(
+                transmitted_backdrop(view_dir, normal, reflected, world_position, thickness, ior - half_spread, roughness, lod).r,
+                seen.g,
+                transmitted_backdrop(view_dir, normal, reflected, world_position, thickness, ior + half_spread, roughness, lod).b,
+            );
+        }
         transmitted = seen * albedo * transmission * (1.0 - metallic) * (1.0 - fresnel);
     }
     return diffuse + specular + transmitted;
