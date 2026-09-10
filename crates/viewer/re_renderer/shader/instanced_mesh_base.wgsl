@@ -76,8 +76,9 @@ struct VertexOut {
     @location(5) @interpolate(flat)
     picking_layer_id: vec4u,
 
+    // xyz = world position, w = slab thickness (flat per instance; 15 inter-stage variables is the cap).
     @location(6) @interpolate(perspective, sample)
-    world_position: vec3f,
+    world_position: vec4f,
 
     @location(7) @interpolate(flat)
     params0: vec4f,
@@ -91,12 +92,9 @@ struct VertexOut {
     params4: vec4f,
     @location(12) @interpolate(flat)
     params5: vec4f,
-    @location(13) @interpolate(flat)
-    thickness: f32,
-
-    @location(14) @interpolate(perspective, center)
+    @location(13) @interpolate(perspective, center)
     footprint_normal: vec3f,
-    @location(15) @interpolate(perspective, center)
+    @location(14) @interpolate(perspective, center)
     footprint_position: vec3f,
 };
 
@@ -134,16 +132,15 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
                                     in_instance.additive_tint_srgba.a);
     out.outline_mask_ids = in_instance.outline_mask_ids;
     out.picking_layer_id = in_instance.picking_layer_id;
-    out.world_position = world_position;
+    out.world_position = vec4f(world_position, length(in_instance.world_from_mesh_row_0.xyz));
     out.params0 = in_instance.params0;
     out.params1 = in_instance.params1;
     out.params2 = in_instance.params2;
     out.params3 = in_instance.params3;
     out.params4 = in_instance.params4;
     out.params5 = in_instance.params5;
-    out.thickness = length(in_instance.world_from_mesh_row_0.xyz);
     out.footprint_normal = out.normal_world_space;
-    out.footprint_position = out.world_position;
+    out.footprint_position = world_position;
 
     return out;
 }
@@ -156,7 +153,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         if clip.cap == 1u && back && dot(clip.plane.xyz,clip.plane.xyz) > 0.0 { n = normalize(clip.plane.xyz); }
         prepare_surface_footprint(in.footprint_position,n);
     }
-    if clip_outside(clip.plane, in.world_position) {
+    if clip_outside(clip.plane, in.world_position.xyz) {
         discard;
     }
     let sample = textureSample(albedo_texture, trilinear_sampler_repeat, in.texcoord);
@@ -181,7 +178,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         // no normal, no shading
         return albedo;
     }
-    let view_dir = view_direction_to_camera(in.world_position);
+    let view_dir = view_direction_to_camera(in.world_position.xyz);
     var normal = normalize(in.normal_world_space);
     let back_side = dot(normal, view_dir) < 0.0;
     if back_side {
@@ -197,13 +194,13 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if coverage <= 0.0 {
         return vec4f(0.0);
     }
-    let radiance = motolii_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position, in.thickness, params, in.texcoord, coverage));
+    let radiance = motolii_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position.xyz, in.world_position.w, params, in.texcoord, coverage));
     return vec4f(radiance * coverage, coverage);
 }
 
 @fragment
 fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
-    if clip_outside(clip.plane, in.world_position) {
+    if clip_outside(clip.plane, in.world_position.xyz) {
         discard;
     }
     return in.picking_layer_id;
