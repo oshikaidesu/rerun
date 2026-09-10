@@ -85,6 +85,20 @@ pub fn equirect_uv_from_direction(dir: glam::Vec3) -> glam::Vec2 {
     glam::vec2(u, v)
 }
 
+/// The one light that casts shadows: the environment's brightest direction, and the picture of what
+/// blocks it (a cookie rendered from the sun; premultiplied tint × coverage). Everything shaded reads it.
+#[derive(Clone, Debug)]
+pub struct SunLight {
+    /// World direction toward the sun.
+    pub direction: glam::Vec3,
+    /// Share of the diffuse light that comes from the sun, in [0, 1]; what a shadow takes away.
+    pub weight: f32,
+    pub color: glam::Vec3,
+    /// World position → cookie uv.
+    pub uv_from_world: glam::Mat4,
+    pub cookie: GpuTexture2D,
+}
+
 /// Direction for the center of an equirectangular texel. Inverse of [`equirect_uv_from_direction`].
 pub fn direction_from_equirect_uv(uv: glam::Vec2) -> glam::Vec3 {
     let phi = (uv.x - 0.5) * std::f32::consts::TAU;

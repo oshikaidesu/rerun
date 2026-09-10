@@ -195,6 +195,28 @@ fn env_brdf_approx(f0: vec3f, roughness: f32, n_dot_v: f32) -> vec3f {
     return f0 * ab.x + ab.y;
 }
 
+/// Light from the sun that reaches `position`: 1 where nothing blocks it, the blocker's tint × coverage
+/// where the cookie says something does. No depth: a blocker shades everything along its ray.
+fn sun_light_through(position: vec3f) -> vec3f {
+    if frame.sun_direction.w <= 0.0 {
+        return vec3f(1.0);
+    }
+    let uv = (frame.light_uv_from_world * vec4f(position, 1.0)).xy;
+    if any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) {
+        return vec3f(1.0);
+    }
+    let cookie = textureSampleLevel(light_cookie, screen_sampler, uv, 0.0);
+    return vec3f(1.0 - cookie.a) + cookie.rgb;
+}
+
+/// Shadow factor: only the sun's share of the light is taken away, scaled by how much the surface
+/// faces the sun. `facing_floor` keeps a flat, unlit picture readable as a receiver.
+fn sun_shade(position: vec3f, normal: vec3f, facing_floor: f32) -> vec3f {
+    let facing = max(clamp(dot(normal, frame.sun_direction.xyz), 0.0, 1.0), facing_floor);
+    let share = frame.sun_direction.w * facing;
+    return vec3f(1.0) - share * (vec3f(1.0) - sun_light_through(position));
+}
+
 /// What is drawn behind the surface, seen where a ray refracted at `ior` leaves a slab of `thickness`;
 /// the environment where nothing is drawn.
 fn transmitted_backdrop(view_dir: vec3f, normal: vec3f, reflected: vec3f, world_position: vec3f, thickness: f32, ior: f32, roughness: f32, lod: f32) -> vec3f {
@@ -222,8 +244,14 @@ fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: 
     let f0 = mix(vec3f(f0_dielectric), albedo, metallic);
     let diffuse_weight = (1.0 - metallic) * (1.0 - transmission);
 
+    if frame.sun_color.w > 0.0 {
+        // Light cookie capture: what this surface lets through, straight along the sun's ray.
+        return albedo * transmission * (1.0 - metallic);
+    }
+    let shade = sun_shade(world_position, normal, 0.0);
+
     if frame.environment_present != 1u && frame.reflection_origin.w == 0.0 {
-        return albedo * simple_lighting(normal);
+        return albedo * simple_lighting(normal) * shade;
     }
 
     let diffuse = albedo * diffuse_weight * diffuse_shading(normal);
@@ -265,5 +293,5 @@ fn shade_surface(albedo: vec3f, normal: vec3f, view_dir: vec3f, world_position: 
         }
         transmitted = seen * albedo * transmission * (1.0 - metallic) * (1.0 - fresnel);
     }
-    return diffuse + specular + transmitted;
+    return (diffuse + specular) * shade + transmitted;
 }

@@ -60,7 +60,12 @@ pub struct FrameUniformBuffer {
     pub reflection_origin_second: wgpu_buffer_types::Vec4,
     pub reflection_min: wgpu_buffer_types::Vec4,
     pub reflection_max: wgpu_buffer_types::Vec4,
-    pub _end_padding: [wgpu_buffer_types::PaddingRow; 9],
+    /// xyz: world direction toward the sun; w: its share of the diffuse light (0 = none bound).
+    pub sun_direction: wgpu_buffer_types::Vec4,
+    /// rgb: the sun's tint; w: 1 while the light cookie is captured.
+    pub sun_color: wgpu_buffer_types::Vec4,
+    pub light_uv_from_world: wgpu_buffer_types::Mat4,
+    pub _end_padding: [wgpu_buffer_types::PaddingRow; 3],
 }
 
 /// Global bindings which are always available on bind group 0 for all [`crate::renderer::Renderer`].
@@ -82,6 +87,8 @@ pub struct EnvironmentBindings {
     /// mip chain), read by transmissive surfaces. Zero texture when there is none.
     pub backdrop: GpuTextureHandle,
     pub reflection: GpuTextureHandle,
+    /// Blockers seen from the sun (premultiplied tint × coverage). Zero texture when there is none.
+    pub light_cookie: GpuTextureHandle,
 }
 
 impl GlobalBindings {
@@ -186,6 +193,17 @@ impl GlobalBindings {
                             },
                             count: None,
                         },
+                        // Light cookie: the blockers seen from the sun.
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 10,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
                     ],
                 },
             ),
@@ -281,6 +299,7 @@ impl GlobalBindings {
                     BindGroupEntry::DefaultTextureView(environment.backdrop),
                     BindGroupEntry::Sampler(self.screen_sampler),
                     BindGroupEntry::DefaultTextureView(environment.reflection),
+                    BindGroupEntry::DefaultTextureView(environment.light_cookie),
                 ],
                 layout: self.layout,
             },

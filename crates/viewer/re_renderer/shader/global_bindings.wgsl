@@ -44,6 +44,13 @@ struct FrameUniformBuffer {
     reflection_origin_second: vec4f,
     reflection_min: vec4f,
     reflection_max: vec4f,
+    /// xyz: world direction toward the sun (the environment's brightest texel); w: the share of the
+    /// diffuse light that comes from it. 0 = no sun bound, nothing casts a shadow.
+    sun_direction: vec4f,
+    /// rgb: the sun's tint. w = 1 while the light cookie is captured: surfaces then write what they let through.
+    sun_color: vec4f,
+    /// World → light cookie uv (orthographic, looking along the sun).
+    light_uv_from_world: mat4x4f,
 };
 
 @group(0) @binding(0)
@@ -68,6 +75,10 @@ var screen_sampler: sampler;
 
 @group(0) @binding(9)
 var scene_reflection: texture_2d<f32>;
+
+/// What the sun's light meets on its way: premultiplied tint × coverage of the blockers, seen from the sun.
+@group(0) @binding(10)
+var light_cookie: texture_2d<f32>;
 
 // See config.rs#DeviceTier
 const DEVICE_TIER_GLES = 0u;

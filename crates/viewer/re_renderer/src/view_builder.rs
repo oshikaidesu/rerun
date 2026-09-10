@@ -304,6 +304,10 @@ pub struct TargetConfiguration {
     /// chain). Transmissive surfaces refract into it; where its alpha is 0 the environment shows.
     pub backdrop: Option<crate::resource_managers::GpuTexture2D>,
     pub scene_reflection: Option<crate::environment::SceneReflection>,
+    /// The sun and its cookie: surfaces darken by the sun's share where the cookie blocks it.
+    pub light: Option<crate::environment::SunLight>,
+    /// This view *is* the cookie capture: surfaces write what they let through instead of shading.
+    pub light_capture: bool,
 }
 
 fn environment_bindings(
@@ -320,6 +324,7 @@ fn environment_bindings(
             .scene_reflection
             .as_ref()
             .map_or(zero, |r| r.atlas.handle()),
+        light_cookie: config.light.as_ref().map_or(zero, |l| l.cookie.handle()),
     }
 }
 
@@ -343,6 +348,8 @@ impl Default for TargetConfiguration {
             environment: None,
             backdrop: None,
             scene_reflection: None,
+            light: None,
+            light_capture: false,
         }
     }
 }
@@ -670,6 +677,22 @@ impl ViewBuilder {
                 .as_ref()
                 .map_or(glam::Mat3::IDENTITY, |e| e.environment_from_world)
                 .into(),
+            sun_direction: config
+                .light
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |l| l.direction.extend(l.weight))
+                .into(),
+            sun_color: config
+                .light
+                .as_ref()
+                .map_or(glam::Vec3::ZERO, |l| l.color)
+                .extend(if config.light_capture { 1.0 } else { 0.0 })
+                .into(),
+            light_uv_from_world: config
+                .light
+                .as_ref()
+                .map_or(glam::Mat4::IDENTITY, |l| l.uv_from_world)
+                .into(),
             _end_padding: Default::default(),
         };
         let frame_uniform_buffer = create_and_fill_uniform_buffer(
@@ -961,6 +984,22 @@ impl ViewBuilder {
                 .environment
                 .as_ref()
                 .map_or(glam::Mat3::IDENTITY, |e| e.environment_from_world)
+                .into(),
+            sun_direction: config
+                .light
+                .as_ref()
+                .map_or(glam::Vec4::ZERO, |l| l.direction.extend(l.weight))
+                .into(),
+            sun_color: config
+                .light
+                .as_ref()
+                .map_or(glam::Vec3::ZERO, |l| l.color)
+                .extend(if config.light_capture { 1.0 } else { 0.0 })
+                .into(),
+            light_uv_from_world: config
+                .light
+                .as_ref()
+                .map_or(glam::Mat4::IDENTITY, |l| l.uv_from_world)
                 .into(),
             _end_padding: Default::default(),
         };
