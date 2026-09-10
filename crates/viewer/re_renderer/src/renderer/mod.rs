@@ -18,7 +18,7 @@ pub use generic_skybox::{GenericSkyboxDrawData, GenericSkyboxType};
 pub use lines::{LineBatchInfo, LineDrawData, LineDrawDataError, LineStripFlags};
 pub use paths::{
     PathContour, PathDrawData, PathDrawDataBuilder, PathFillRule, PathLineCap, PathLineJoin,
-    PathRenderer, PathStroke, PathVertex,
+    PathRenderer, PathStroke, PathVertex, fill_triangles, flattened_contours,
 };
 pub use mesh_program::{
     DEFAULT_FIELD, DEFAULT_SURFACE, MeshProgram, MeshProgramDesc, SurfaceProgram,
