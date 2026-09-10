@@ -156,6 +156,53 @@ fn dashed(path: &Path, pattern: &[f32], offset: f32) -> Path {
     out.build()
 }
 
+fn fill_buffers(contours: &[PathContour], rule: PathFillRule) -> Option<VertexBuffers<[f32; 2], u32>> {
+    let path = lyon_path(contours);
+    let options = FillOptions::tolerance(TOLERANCE).with_fill_rule(match rule {
+        PathFillRule::NonZero => lyon_tessellation::FillRule::NonZero,
+        PathFillRule::EvenOdd => lyon_tessellation::FillRule::EvenOdd,
+    });
+    let mut buffers: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
+    FillTessellator::new()
+        .tessellate_path(
+            &path,
+            &options,
+            &mut BuffersBuilder::new(&mut buffers, |v: FillVertex<'_>| v.position().to_array()),
+        )
+        .ok()
+        .map(|_| buffers)
+}
+
+/// The fill as bare triangles (positions and indices), for callers that build meshes out of it.
+pub fn fill_triangles(contours: &[PathContour], rule: PathFillRule) -> (Vec<glam::Vec2>, Vec<u32>) {
+    match fill_buffers(contours, rule) {
+        Some(buffers) => (buffers.vertices.into_iter().map(glam::Vec2::from).collect(), buffers.indices),
+        None => (Vec::new(), Vec::new()),
+    }
+}
+
+/// The contours flattened to polylines at the renderer's tolerance, with whether each closes.
+pub fn flattened_contours(contours: &[PathContour]) -> Vec<(Vec<glam::Vec2>, bool)> {
+    use lyon_tessellation::path::iterator::PathIterator as _;
+    use lyon_tessellation::path::PathEvent;
+    let path = lyon_path(contours);
+    let mut out = Vec::new();
+    let mut current: Vec<glam::Vec2> = Vec::new();
+    for event in path.iter().flattened(TOLERANCE) {
+        match event {
+            PathEvent::Begin { at } => current = vec![glam::vec2(at.x, at.y)],
+            PathEvent::Line { to, .. } => current.push(glam::vec2(to.x, to.y)),
+            PathEvent::End { close, .. } => {
+                if current.len() >= 2 {
+                    out.push((std::mem::take(&mut current), close));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 impl PathDrawDataBuilder {
     fn push(&mut self, buffers: VertexBuffers<[f32; 2], u32>, color_at: &dyn Fn(glam::Vec2) -> Rgba32Unmul) {
         let base = self.vertices.len() as u32;
@@ -174,18 +221,7 @@ impl PathDrawDataBuilder {
         rule: PathFillRule,
         color_at: &dyn Fn(glam::Vec2) -> Rgba32Unmul,
     ) {
-        let path = lyon_path(contours);
-        let options = FillOptions::tolerance(TOLERANCE).with_fill_rule(match rule {
-            PathFillRule::NonZero => lyon_tessellation::FillRule::NonZero,
-            PathFillRule::EvenOdd => lyon_tessellation::FillRule::EvenOdd,
-        });
-        let mut buffers: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
-        let result = FillTessellator::new().tessellate_path(
-            &path,
-            &options,
-            &mut BuffersBuilder::new(&mut buffers, |v: FillVertex<'_>| v.position().to_array()),
-        );
-        if result.is_ok() {
+        if let Some(buffers) = fill_buffers(contours, rule) {
             self.push(buffers, color_at);
         }
     }
@@ -397,6 +433,14 @@ mod tests {
         let mut d = PathDrawDataBuilder::default();
         d.stroke(&[line], &PathStroke { dash: Some((vec![10.0, 10.0], 0.0)), ..solid }, &white);
         assert_eq!(d.triangle_count(), 10, "5 dashes of 2 triangles");
+
+        let (positions, indices) = fill_triangles(&[square(10.0)], PathFillRule::NonZero);
+        assert_eq!((positions.len(), indices.len()), (4, 6));
+        let mut circle = square(10.0);
+        for v in &mut circle.vertices { v.out_tangent = glam::vec2(2.0, 0.0); v.in_tangent = glam::vec2(-2.0, 0.0); }
+        let flat = flattened_contours(&[circle]);
+        assert_eq!(flat.len(), 1);
+        assert!(flat[0].1 && flat[0].0.len() > 4, "curves flatten into more than the anchors: {}", flat[0].0.len());
 
         let seen = std::cell::Cell::new(0usize);
         let mut g = PathDrawDataBuilder::default();
