@@ -55,7 +55,23 @@ fn avcc_from(video: &VideoDataDescription) -> Option<re_mp4::Avc1Box> {
         .and_then(|details| details.stsd.as_ref())
         .map(|stsd| &stsd.contents)
     {
-        Some(re_mp4::StsdBoxContent::Avc1(avc1)) => Some(avc1.clone()),
+        Some(re_mp4::StsdBoxContent::Avc1(avc1)) => {
+            let mut avc1 = avc1.clone();
+            // openh264 refuses SPS above level 5.2 (dsNoParamSets). x264 tags e.g. 120 fps clips
+            // as level 6.2 regardless of size. level_idc only bounds buffer sizes, so clamp it.
+            const MAX_OPENH264_LEVEL: u8 = 52;
+            if avc1.avcc.avc_level_indication > MAX_OPENH264_LEVEL {
+                avc1.avcc.avc_level_indication = MAX_OPENH264_LEVEL;
+            }
+            for sps in &mut avc1.avcc.sequence_parameter_sets {
+                if let Some(level) = sps.bytes.get_mut(3) {
+                    if *level > MAX_OPENH264_LEVEL {
+                        *level = MAX_OPENH264_LEVEL;
+                    }
+                }
+            }
+            Some(avc1)
+        }
         _ => None,
     }
 }
