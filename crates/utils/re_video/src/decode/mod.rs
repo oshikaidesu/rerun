@@ -332,6 +332,7 @@ pub fn new_decoder(
             output_sender,
             decode_settings.ffmpeg_path.clone(),
             &video.codec,
+            decode_settings.source_yuv,
         )?)),
 
         crate::VideoCodec::ImageSequence(codec) => {
@@ -598,7 +599,7 @@ pub enum YuvPixelLayout {
 /// Yuv value range used by [`PixelFormat::Yuv`].
 ///
 /// For details see `re_renderer`'s `YuvRange` type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub enum YuvRange {
     Limited,
     Full,
@@ -607,7 +608,7 @@ pub enum YuvRange {
 /// Yuv matrix coefficients used by [`PixelFormat::Yuv`].
 ///
 /// For details see `re_renderer`'s `YuvMatrixCoefficients` type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub enum YuvMatrixCoefficients {
     /// Interpret YUV as GBR.
     Identity,
@@ -654,6 +655,13 @@ pub struct DecodeSettings {
     /// If not provided, we use the path automatically determined by `ffmpeg_sidecar`.
     #[cfg(not(target_arch = "wasm32"))]
     pub ffmpeg_path: Option<std::path::PathBuf>,
+
+    /// Treat the decoded YUV as having this range and matrix instead of asking ffmpeg to
+    /// convert to full-range BT.709. Skips ffmpeg's CPU-side color conversion, which is
+    /// 5-12x slower than the decode itself at 4K.
+    ///
+    /// `None` keeps the conversion (needed for sources outside BT.601/BT.709).
+    pub source_yuv: Option<(YuvRange, YuvMatrixCoefficients)>,
 }
 
 impl std::fmt::Display for DecodeHardwareAcceleration {

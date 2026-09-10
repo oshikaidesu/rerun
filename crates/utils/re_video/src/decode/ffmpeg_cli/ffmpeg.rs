@@ -232,6 +232,7 @@ impl FFmpegProcessAndListener {
         encoding_details: Option<&VideoEncodingDetails>,
         ffmpeg_path: Option<&std::path::Path>,
         codec: &crate::VideoCodec,
+        source_yuv: Option<(crate::decode::YuvRange, crate::decode::YuvMatrixCoefficients)>,
     ) -> Result<Self, Error> {
         re_tracing::profile_function!();
 
@@ -240,32 +241,27 @@ impl FFmpegProcessAndListener {
         let (pixel_format, ffmpeg_pix_fmt) = if let Some(chroma_subsampling) =
             encoding_details.and_then(|e| e.chroma_subsampling)
         {
-            // We always get planar layouts back from ffmpeg.
-            let (layout, ffmpeg_pix_fmt) = match chroma_subsampling {
-                ChromaSubsamplingModes::Yuv444 => {
-                    (crate::decode::YuvPixelLayout::Y_U_V444, "yuvj444p")
-                }
-                ChromaSubsamplingModes::Yuv422 => {
-                    (crate::decode::YuvPixelLayout::Y_U_V422, "yuvj422p")
-                }
-                ChromaSubsamplingModes::Yuv420 => {
-                    (crate::decode::YuvPixelLayout::Y_U_V420, "yuvj420p")
-                }
-                ChromaSubsamplingModes::Monochrome => (crate::decode::YuvPixelLayout::Y400, "gray"),
+            // With `source_yuv` we take the samples as they are; the range and matrix are what the
+            // source says. Without it we ask ffmpeg for full-range BT.709 (see `-color_range` /
+            // `-colorspace` below), which inserts a CPU color conversion.
+            let (range, coefficients) = source_yuv.unwrap_or((
+                crate::decode::YuvRange::Full,
+                crate::decode::YuvMatrixCoefficients::Bt709,
+            ));
+            let full = range == crate::decode::YuvRange::Full;
+            // We always get planar layouts back from ffmpeg. The `j` variants are full range;
+            // asking for one on a limited-range source would itself trigger a conversion.
+            let (layout, ffmpeg_pix_fmt) = match (chroma_subsampling, full) {
+                (ChromaSubsamplingModes::Yuv444, true) => (crate::decode::YuvPixelLayout::Y_U_V444, "yuvj444p"),
+                (ChromaSubsamplingModes::Yuv444, false) => (crate::decode::YuvPixelLayout::Y_U_V444, "yuv444p"),
+                (ChromaSubsamplingModes::Yuv422, true) => (crate::decode::YuvPixelLayout::Y_U_V422, "yuvj422p"),
+                (ChromaSubsamplingModes::Yuv422, false) => (crate::decode::YuvPixelLayout::Y_U_V422, "yuv422p"),
+                (ChromaSubsamplingModes::Yuv420, true) => (crate::decode::YuvPixelLayout::Y_U_V420, "yuvj420p"),
+                (ChromaSubsamplingModes::Yuv420, false) => (crate::decode::YuvPixelLayout::Y_U_V420, "yuv420p"),
+                (ChromaSubsamplingModes::Monochrome, _) => (crate::decode::YuvPixelLayout::Y400, "gray"),
             };
 
-            let pixel_format = PixelFormat::Yuv {
-                layout,
-                // Unfortunately the color range is an entirely different thing to parse as it's part of optional Video Usability Information (VUI).
-                //
-                // We instead just always tell ffmpeg to give us full range, see`-color_range` below.
-                // Note that yuvj4xy family of formats fulfill the same function. They according to this post
-                // https://www.facebook.com/permalink.php?story_fbid=2413101932257643&id=100006735798590
-                // they are still not quite passed through everywhere. So we'll just use both.
-                range: crate::decode::YuvRange::Full,
-                // Again, instead of parsing this out we tell ffmpeg to give us BT.709.
-                coefficients: crate::decode::YuvMatrixCoefficients::Bt709,
-            };
+            let pixel_format = PixelFormat::Yuv { layout, range, coefficients };
 
             (pixel_format, ffmpeg_pix_fmt)
         } else {
@@ -285,7 +281,7 @@ impl FFmpegProcessAndListener {
             _ => unreachable!(),
         };
 
-        let mut ffmpeg = ffmpeg_command
+        ffmpeg_command
             // Keep banner enabled so we can check on the version more easily.
             //.hide_banner()
             // "Reduce the latency introduced by buffering during initial input streams analysis."
@@ -308,13 +304,13 @@ impl FFmpegProcessAndListener {
             .fps_mode("passthrough")
             .pix_fmt(ffmpeg_pix_fmt)
             // ffmpeg-sidecar's .rawvideo() sets pix_fmt to rgb24, we don't want that.
-            .args(["-f", "rawvideo"])
-            // This should be taken care of by the yuvj formats, but let's be explicit again that we want full color range
-            .args(["-color_range", "2"]) // 2 == pc/full
-            // Besides the less and less common Bt601, this is the only space we support right now, so let ffmpeg do the conversion.
-            // TODO(andreas): It seems that FFmpeg 7.0 handles this as I expect, but FFmpeg 7.1 consistently gives me the wrong colors on the Bunny test clip.
-            // (tested Windows with both FFmpeg 7.0 and 7.1, tested Mac with 7.1. More rigorous testing and comparing is required!)
-            .args(["-colorspace", "1"]) // 1 == Bt.709
+            .args(["-f", "rawvideo"]);
+        if source_yuv.is_none() {
+            // Full color range (2 == pc/full) and BT.709 (1). Both make ffmpeg insert a
+            // software color conversion; only used when the caller does not know the source color.
+            ffmpeg_command.args(["-color_range", "2"]).args(["-colorspace", "1"]);
+        }
+        let mut ffmpeg = ffmpeg_command
             .output("-") // Output to stdout.
             .spawn()
             .map_err(Error::FailedToStartFfmpeg)?;
@@ -863,6 +859,7 @@ pub struct FFmpegCliDecoder {
     output_sender: Sender<FrameResult>,
     ffmpeg_path: Option<std::path::PathBuf>,
     codec: crate::VideoCodec,
+    source_yuv: Option<(crate::decode::YuvRange, crate::decode::YuvMatrixCoefficients)>,
 }
 
 impl FFmpegCliDecoder {
@@ -872,6 +869,7 @@ impl FFmpegCliDecoder {
         output_sender: Sender<FrameResult>,
         ffmpeg_path: Option<std::path::PathBuf>,
         codec: &crate::VideoCodec,
+        source_yuv: Option<(crate::decode::YuvRange, crate::decode::YuvMatrixCoefficients)>,
     ) -> Result<Self, Error> {
         re_tracing::profile_function!();
 
@@ -890,6 +888,7 @@ impl FFmpegCliDecoder {
             encoding_details,
             ffmpeg_path.as_deref(),
             codec,
+            source_yuv,
         )?;
 
         Ok(Self {
@@ -898,6 +897,7 @@ impl FFmpegCliDecoder {
             output_sender,
             ffmpeg_path,
             codec: codec.clone(),
+            source_yuv,
         })
     }
 }
@@ -961,6 +961,7 @@ impl AsyncDecoder for FFmpegCliDecoder {
             video_descr.encoding_details.as_ref(),
             self.ffmpeg_path.as_deref(),
             &self.codec,
+            self.source_yuv,
         )?;
         Ok(())
     }
