@@ -357,7 +357,7 @@ mod gpu_data {
         surface_params: [wgpu_buffer_types::Vec4; 6],
         surface_thickness: f32,
         _surface_padding: [f32; 3],
-        _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 12],
+        _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 15],
     }
 
     impl UniformBuffer {
