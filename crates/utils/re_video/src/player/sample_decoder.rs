@@ -166,6 +166,11 @@ impl VideoSampleDecoder {
         self.decoder.min_num_samples_to_enqueue_ahead()
     }
 
+    /// Tell the decoder whether the player is behind the requested frame.
+    pub fn set_hurry(&mut self, hurry: bool) {
+        self.decoder.set_hurry(hurry);
+    }
+
     pub fn max_num_samples_to_enqueue_ahead(&self) -> usize {
         // To not fill memory up too much, only queue up a limited amount of samples.
         //

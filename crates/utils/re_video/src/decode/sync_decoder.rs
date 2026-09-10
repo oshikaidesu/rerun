@@ -23,4 +23,7 @@ pub trait SyncDecoder {
 
     /// See [`crate::decode::AsyncDecoder::end_of_video`]: flush what the decoder still holds.
     fn end_of_video(&mut self, _output_sender: &Sender<FrameResult>) {}
+
+    /// See [`crate::decode::AsyncDecoder::set_hurry`].
+    fn set_hurry(&mut self, _hurry: bool) {}
 }

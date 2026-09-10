@@ -274,6 +274,10 @@ pub trait AsyncDecoder: Send + Sync {
     fn min_num_samples_to_enqueue_ahead(&self) -> usize {
         0
     }
+
+    /// The player is behind the requested frame. Decoders may trade quality for speed while this is set
+    /// (e.g. skip non-reference frames); default does nothing.
+    fn set_hurry(&mut self, _hurry: bool) {}
 }
 
 /// Creates a new async decoder for the given `video` data.

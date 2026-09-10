@@ -161,6 +161,8 @@ pub struct LavcDecoder {
     threads_ahead: usize,
     /// EOF was sent; the decoder must be reopened before it takes packets again.
     drained: bool,
+    /// Behind the requested frame: skip non-reference frames until caught up.
+    hurry: bool,
 }
 
 impl LavcDecoder {
@@ -189,6 +191,7 @@ impl LavcDecoder {
             sw_frame: ff::util::frame::Video::empty(),
             threads_ahead: std::thread::available_parallelism().map_or(4, |n| n.get()).min(8),
             drained: false,
+            hurry: false,
         })
     }
 
@@ -201,6 +204,17 @@ impl LavcDecoder {
             Err(err) => re_log::warn_once!("{}: could not reopen libavcodec decoder: {err}", self.debug_name),
         }
         self.drained = false;
+        self.apply_hurry();
+    }
+
+    fn apply_hurry(&mut self) {
+        // Hardware decoders decode everything anyway; this only helps software decoding.
+        let discard = if self.hurry && !self.hw_used {
+            ff::codec::discard::Discard::NonReference
+        } else {
+            ff::codec::discard::Discard::Default
+        };
+        self.decoder.skip_frame(discard);
     }
 
     pub fn min_num_samples_ahead(&self) -> usize {
@@ -391,5 +405,12 @@ impl SyncDecoder for LavcDecoder {
 
     fn min_num_samples_to_enqueue_ahead(&self) -> usize {
         self.min_num_samples_ahead()
+    }
+
+    fn set_hurry(&mut self, hurry: bool) {
+        if self.hurry != hurry {
+            self.hurry = hurry;
+            self.apply_hurry();
+        }
     }
 }

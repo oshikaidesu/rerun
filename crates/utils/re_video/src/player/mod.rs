@@ -576,6 +576,10 @@ impl<T: Default> VideoPlayer<T> {
             };
         }
 
+        // Behind: let the decoder trade quality for speed until it has caught up.
+        self.sample_decoder
+            .set_hurry(self.decoder_delay_state == DecoderDelayState::Behind);
+
         // Decide whether to show a loading indicator or even error out.
         let show_loading_indicator = match self.decoder_delay_state {
             DecoderDelayState::UpToDate => {

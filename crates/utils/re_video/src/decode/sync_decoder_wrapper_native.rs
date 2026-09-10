@@ -12,6 +12,8 @@ enum Command {
 
     EndOfVideo,
 
+    Hurry(bool),
+
     // Boxed, because `VideoDataDescription` is huge.
     Reset(Box<VideoDataDescription>),
 
@@ -104,6 +106,10 @@ impl AsyncDecoder for SyncDecoderWrapper {
         Ok(())
     }
 
+    fn set_hurry(&mut self, hurry: bool) {
+        self.command_tx.send(Command::Hurry(hurry)).ok();
+    }
+
     /// Resets the decoder.
     ///
     /// This does not block; chunks sent before this point will be discarded.
@@ -164,6 +170,7 @@ fn decoder_thread(
                     decoder.end_of_video(output_sender);
                 }
             }
+            Command::Hurry(hurry) => decoder.set_hurry(hurry),
             Command::Reset(video_data_description) => {
                 decoder.reset(&video_data_description);
                 comms.num_outstanding_resets.fetch_sub(1, Ordering::Release);
