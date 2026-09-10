@@ -91,6 +91,9 @@ mod av1;
 #[cfg(with_ffmpeg)]
 mod ffmpeg_cli;
 
+#[cfg(feature = "openh264")]
+mod openh264_decoder;
+
 #[cfg(with_ffmpeg)]
 pub use ffmpeg_cli::FFmpegCliDecoder;
 #[cfg(with_ffmpeg)]
@@ -155,6 +158,9 @@ pub enum DecodeError {
 
     #[error("Unsupported bits per component: {0}")]
     BadBitsPerComponent(#[size_bytes(ignore)] usize),
+
+    #[error("openh264: {0}")]
+    OpenH264(#[size_bytes(ignore)] String),
 }
 
 impl DecodeError {
@@ -185,6 +191,9 @@ impl DecodeError {
 
             // Unsupported format.
             Self::BadBitsPerComponent(_) => false,
+
+            // openh264 refused a chunk or failed to start; the next keyframe usually recovers.
+            Self::OpenH264(_) => true,
         }
     }
 
@@ -201,6 +210,7 @@ impl DecodeError {
             Self::WebDecoder(err) => err.severity(),
             #[cfg(with_ffmpeg)]
             Self::Ffmpeg(_) => VideoPlaybackIssueSeverity::Error,
+            Self::OpenH264(_) => VideoPlaybackIssueSeverity::Error,
 
             Self::UnsupportedCodec(_)
             | Self::Dav1dWithoutNasm
@@ -320,6 +330,20 @@ pub fn new_decoder(
                     output_sender,
                 )));
             }
+        }
+
+        #[cfg(feature = "openh264")]
+        crate::VideoCodec::H264 if decode_settings.in_process => {
+            re_log::trace!("Decoding H.264 in-process with openh264…");
+            Ok(Box::new(sync_decoder_wrapper::SyncDecoderWrapper::new(
+                debug_name.to_owned(),
+                Box::new(openh264_decoder::OpenH264Decoder::new(
+                    debug_name.to_owned(),
+                    video,
+                    decode_settings.source_yuv,
+                )?),
+                output_sender,
+            )))
         }
 
         #[cfg(with_ffmpeg)]
@@ -662,6 +686,11 @@ pub struct DecodeSettings {
     ///
     /// `None` keeps the conversion (needed for sources outside BT.601/BT.709).
     pub source_yuv: Option<(YuvRange, YuvMatrixCoefficients)>,
+
+    /// Decode in this process (hardware decoder, then openh264) instead of an ffmpeg child process.
+    /// One decoder object per stream instead of one process per stream.
+    #[serde(default)]
+    pub in_process: bool,
 }
 
 impl std::fmt::Display for DecodeHardwareAcceleration {

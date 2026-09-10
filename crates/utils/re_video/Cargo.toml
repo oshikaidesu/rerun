@@ -29,6 +29,9 @@ av1 = ["dep:dav1d"]
 ## Decode H.264 using ffmpeg over CLI.
 ffmpeg = ["dep:ffmpeg-sidecar"]
 
+## Decode H.264 in-process with Cisco's openh264 (software, no ffmpeg binary needed).
+openh264 = ["dep:openh264"]
+
 ## Enable faster native video decoding with assembly.
 ## You need to install [nasm](https://github.com/netwide-assembler/nasm) to compile with this feature.
 nasm = [
@@ -67,6 +70,7 @@ thiserror.workspace = true
 web-time.workspace = true
 
 ffmpeg-sidecar = { workspace = true, optional = true }
+openh264 = { workspace = true, optional = true }
 # On web we only need PNG for non-8-bit PNGs, since there is no browser decoder path that preserves them.
 # Other web images should go through browser decoding instead.
 image = { workspace = true, default-features = false, features = ["png"] }
