@@ -122,7 +122,7 @@ pub use wgpu_resources::{
     GpuPipelineLayoutPool, GpuRenderPipelineHandle, GpuRenderPipelinePool,
     GpuRenderPipelinePoolAccessor, GpuSamplerHandle, GpuSamplerPool, GpuShaderModuleHandle,
     GpuShaderModulePool, GpuTexture, GpuTextureHandle, PipelineLayoutDesc, RenderPipelineDesc,
-    SamplerDesc, ShaderModuleDesc, VertexBufferLayout, WgpuResourcePoolStatistics,
+    SamplerDesc, ShaderModuleDesc, TextureDesc, VertexBufferLayout, WgpuResourcePoolStatistics,
 };
 
 pub use self::file_resolver::{
