@@ -242,6 +242,16 @@ pub enum BlendWithBackground {
     Premultiplied = 2,
 }
 
+
+/// Mip levels a surface reads from a backdrop of `level_count` levels (base included) when its
+/// roughness is at most `max_roughness`. Mirrors the lod in `utils/lighting.wgsl`
+/// (`pow(r, 0.8) * (levels - 1) * 0.55`, trilinear reads the level above too), so the embedder can
+/// stop generating levels nobody samples. Only valid while `FILTER_SURFACE_FOOTPRINT` is off.
+pub fn backdrop_levels_read(max_roughness: f32, level_count: u32) -> u32 {
+    let lod = max_roughness.clamp(0.0, 1.0).powf(0.8) * level_count.max(1).saturating_sub(1) as f32 * 0.55;
+    (lod.ceil() as u32 + 1).clamp(1, level_count.max(1))
+}
+
 /// Basic configuration for a target view.
 #[derive(Debug)]
 pub struct TargetConfiguration {

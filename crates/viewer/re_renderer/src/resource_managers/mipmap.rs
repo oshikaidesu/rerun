@@ -91,6 +91,12 @@ impl MipmapGenerator {
     /// Records one draw per level below the base into `encoder`. The texture must carry
     /// `RENDER_ATTACHMENT | TEXTURE_BINDING` and its levels must already be allocated.
     pub fn generate(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+        self.generate_levels(device, encoder, texture, texture.mip_level_count());
+    }
+
+    /// Like `generate`, but stops after `levels` levels counting the base: levels the reader will
+    /// never sample stay untouched (Unity's "blur only as far as the roughness needs" for screen copies).
+    pub fn generate_levels(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, levels: u32) {
         let format = texture.format();
         let pipeline = self.pipelines.entry(format).or_insert_with(|| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -119,7 +125,7 @@ impl MipmapGenerator {
                 cache: None,
             })
         });
-        for level in 1..texture.mip_level_count() {
+        for level in 1..levels.min(texture.mip_level_count()) {
             let view = |base_mip_level: u32| {
                 texture.create_view(&wgpu::TextureViewDescriptor {
                     base_mip_level,

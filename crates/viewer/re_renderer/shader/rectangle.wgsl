@@ -84,7 +84,7 @@ struct UniformBuffer {
 
     /// World-space cut: (normal, distance); zero normal = none.
     clip_plane: vec4f,
-    surface_params: array<vec4f, 3>,
+    surface_params: array<vec4f, 6>,
     surface_thickness: f32,
 };
 

@@ -42,16 +42,12 @@ pub(super) mod gpu_data {
         pub world_from_mesh_row_1: [f32; 4],
         pub world_from_mesh_row_2: [f32; 4],
 
-        pub world_from_mesh_normal_row_0: [f32; 3],
-        pub world_from_mesh_normal_row_1: [f32; 3],
-        pub world_from_mesh_normal_row_2: [f32; 3],
-
         pub additive_tint: Color32,
 
         pub picking_layer_id: [u32; 4],
 
-        /// 12 floats the program's hooks read. See `GpuMeshInstance::params`.
-        pub params: [[f32; 4]; 3],
+        /// 24 floats the program's hooks read. See `GpuMeshInstance::params`.
+        pub params: [[f32; 4]; 6],
 
         // Need only the first two bytes, but we want to keep everything aligned to at least 4 bytes.
         pub outline_mask_ids: [u8; 4],
@@ -71,16 +67,16 @@ pub(super) mod gpu_data {
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
-                        // Transposed inverse mesh transform.
-                        wgpu::VertexFormat::Float32x3,
-                        wgpu::VertexFormat::Float32x3,
-                        wgpu::VertexFormat::Float32x3,
                         // Tint color
                         wgpu::VertexFormat::Unorm8x4,
                         // Picking id.
                         // Again this adds overhead for non-picking passes, more this time. Consider moving this elsewhere.
                         wgpu::VertexFormat::Uint32x4,
-                        // Hook params (3 x vec4f). 16 vertex attribute locations is the floor of what wgpu guarantees.
+                        // Hook params (6 x vec4f). 16 vertex attribute locations is the floor of what wgpu
+                        // guarantees; the normal transform is derived in the vertex shader to make room.
+                        wgpu::VertexFormat::Float32x4,
+                        wgpu::VertexFormat::Float32x4,
+                        wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
@@ -187,8 +183,8 @@ pub struct GpuMeshInstance {
     /// Shader variant drawing this instance; `None` is the renderer's default (matte, no field).
     pub program: Option<Arc<MeshProgram>>,
 
-    /// 12 floats read by the program's hooks (`FieldIn::params` / `SurfaceIn::params`), in vec4 groups.
-    pub params: [f32; 12],
+    /// 24 floats read by the program's hooks (`FieldIn::params` / `SurfaceIn::params`), in vec4 groups.
+    pub params: [f32; 24],
 }
 
 impl GpuMeshInstance {
@@ -202,7 +198,7 @@ impl GpuMeshInstance {
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
             program: None,
-            params: [0.0; 12],
+            params: [0.0; 24],
         }
     }
 }
@@ -392,12 +388,6 @@ impl MeshDrawData {
                     // If the matrix is not invertible the draw result is likely invalid as well.
                     // However, at this point it's really hard to bail out!
                     // Also, by skipping drawing here, we'd make the result worse as there would be no mesh draw calls that could be debugged.
-                    let world_from_mesh_normal =
-                        if instance.world_from_mesh.matrix3.determinant() == 0.0 {
-                            glam::Mat3A::ZERO
-                        } else {
-                            instance.world_from_mesh.matrix3.inverse().transpose()
-                        };
                     instance_buffer_staging.push(gpu_data::InstanceData {
                         world_from_mesh_row_0: world_from_mesh_mat3
                             .row(0)
@@ -411,35 +401,13 @@ impl MeshDrawData {
                             .row(2)
                             .extend(instance.world_from_mesh.translation.z)
                             .to_array(),
-                        world_from_mesh_normal_row_0: world_from_mesh_normal.row(0).to_array(),
-                        world_from_mesh_normal_row_1: world_from_mesh_normal.row(1).to_array(),
-                        world_from_mesh_normal_row_2: world_from_mesh_normal.row(2).to_array(),
                         additive_tint: instance.additive_tint,
                         outline_mask_ids: instance
                             .outline_mask_ids
                             .0
                             .map_or([0, 0, 0, 0], |mask| [mask[0], mask[1], 0, 0]),
                         picking_layer_id: instance.picking_layer_id.into(),
-                        params: [
-                            [
-                                instance.params[0],
-                                instance.params[1],
-                                instance.params[2],
-                                instance.params[3],
-                            ],
-                            [
-                                instance.params[4],
-                                instance.params[5],
-                                instance.params[6],
-                                instance.params[7],
-                            ],
-                            [
-                                instance.params[8],
-                                instance.params[9],
-                                instance.params[10],
-                                instance.params[11],
-                            ],
-                        ],
+                        params: std::array::from_fn(|g| std::array::from_fn(|i| instance.params[g * 4 + i])),
                     })?;
 
                     // Transparent instances can not be batched.
@@ -903,7 +871,7 @@ mod tests {
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
             program: None,
-            params: [0.0; 12],
+            params: [0.0; 24],
         }
     }
 

@@ -13,11 +13,11 @@
 //   fn motolii_surface(in: SurfaceIn) -> vec3f       radiance leaving a shaded fragment
 
 /// Vertex hook input. `frame_position` is the vertex in the instance frame (rotation and scale of
-/// world_from_mesh, no translation), so a field travels with its mesh. `params` are the instance's 12 floats.
+/// world_from_mesh, no translation), so a field travels with its mesh. `params` are the instance's 24 floats.
 struct FieldIn {
     frame_position: vec3f,
     normal: vec3f,
-    params: array<vec4f, 3>,
+    params: array<vec4f, 6>,
 };
 
 struct FieldOut {
@@ -86,11 +86,17 @@ struct VertexOut {
     @location(9) @interpolate(flat)
     params2: vec4f,
     @location(10) @interpolate(flat)
+    params3: vec4f,
+    @location(11) @interpolate(flat)
+    params4: vec4f,
+    @location(12) @interpolate(flat)
+    params5: vec4f,
+    @location(13) @interpolate(flat)
     thickness: f32,
 
-    @location(11) @interpolate(perspective, center)
+    @location(14) @interpolate(perspective, center)
     footprint_normal: vec3f,
-    @location(12) @interpolate(perspective, center)
+    @location(15) @interpolate(perspective, center)
     footprint_position: vec3f,
 };
 
@@ -103,13 +109,17 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
         dot(in_instance.world_from_mesh_row_2.xyz, in_vertex.position),
     );
     let translation = vec3f(in_instance.world_from_mesh_row_0.w, in_instance.world_from_mesh_row_1.w, in_instance.world_from_mesh_row_2.w);
-    var world_normal = vec3f(
-        dot(in_instance.world_from_mesh_normal_row_0.xyz, in_vertex.normal),
-        dot(in_instance.world_from_mesh_normal_row_1.xyz, in_vertex.normal),
-        dot(in_instance.world_from_mesh_normal_row_2.xyz, in_vertex.normal),
-    );
+    // Normal transform = transpose(inverse(M)) = cofactor(M) / det(M); zero for a degenerate M.
+    let col0 = vec3f(in_instance.world_from_mesh_row_0.x, in_instance.world_from_mesh_row_1.x, in_instance.world_from_mesh_row_2.x);
+    let col1 = vec3f(in_instance.world_from_mesh_row_0.y, in_instance.world_from_mesh_row_1.y, in_instance.world_from_mesh_row_2.y);
+    let col2 = vec3f(in_instance.world_from_mesh_row_0.z, in_instance.world_from_mesh_row_1.z, in_instance.world_from_mesh_row_2.z);
+    let det = dot(col0, cross(col1, col2));
+    var world_normal = vec3f(0.0);
+    if det != 0.0 {
+        world_normal = (cross(col1, col2) * in_vertex.normal.x + cross(col2, col0) * in_vertex.normal.y + cross(col0, col1) * in_vertex.normal.z) / det;
+    }
     var world_position = frame_position + translation;
-    let params = array<vec4f, 3>(in_instance.params0, in_instance.params1, in_instance.params2);
+    let params = array<vec4f, 6>(in_instance.params0, in_instance.params1, in_instance.params2, in_instance.params3, in_instance.params4, in_instance.params5);
     let field = motolii_field(FieldIn(frame_position, world_normal, params));
     world_position += field.offset;
     world_normal = field.normal;
@@ -128,6 +138,9 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     out.params0 = in_instance.params0;
     out.params1 = in_instance.params1;
     out.params2 = in_instance.params2;
+    out.params3 = in_instance.params3;
+    out.params4 = in_instance.params4;
+    out.params5 = in_instance.params5;
     out.thickness = length(in_instance.world_from_mesh_row_0.xyz);
     out.footprint_normal = out.normal_world_space;
     out.footprint_position = out.world_position;
@@ -179,7 +192,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if clip.cap == 1u && back_side && dot(clip.plane.xyz, clip.plane.xyz) > 0.0 {
         normal = normalize(clip.plane.xyz);
     }
-    let params = array<vec4f, 3>(in.params0, in.params1, in.params2);
+    let params = array<vec4f, 6>(in.params0, in.params1, in.params2, in.params3, in.params4, in.params5);
     let coverage = albedo.a;
     if coverage <= 0.0 {
         return vec4f(0.0);

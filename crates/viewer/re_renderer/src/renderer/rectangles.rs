@@ -255,7 +255,7 @@ pub struct RectangleOptions {
 
     /// Shared surface shader, also accepted by mesh instances. None keeps the image unlit.
     pub surface: Option<Arc<super::SurfaceProgram>>,
-    pub surface_params: [f32; 12],
+    pub surface_params: [f32; 24],
     /// Optical slab thickness in world units; independent of the planar geometry.
     pub surface_thickness: f32,
 }
@@ -270,7 +270,7 @@ impl Default for RectangleOptions {
             outline_mask: OutlineMaskPreference::NONE,
             clip: crate::ClipPlane::NONE,
             surface: None,
-            surface_params: [0.0; 12],
+            surface_params: [0.0; 24],
             surface_thickness: 1.0,
         }
     }
@@ -354,7 +354,7 @@ mod gpu_data {
 
         clip_plane: wgpu_buffer_types::Vec4,
 
-        surface_params: [wgpu_buffer_types::Vec4; 3],
+        surface_params: [wgpu_buffer_types::Vec4; 6],
         surface_thickness: f32,
         _surface_padding: [f32; 3],
         _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 12],

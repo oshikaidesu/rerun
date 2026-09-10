@@ -13,14 +13,15 @@ struct InstanceIn {
     @location(4) world_from_mesh_row_0: vec4f,
     @location(5) world_from_mesh_row_1: vec4f,
     @location(6) world_from_mesh_row_2: vec4f,
-    @location(7) world_from_mesh_normal_row_0: vec3f,
-    @location(8) world_from_mesh_normal_row_1: vec3f,
-    @location(9) world_from_mesh_normal_row_2: vec3f,
-    @location(10) additive_tint_srgba: vec4f,
-    @location(11) picking_layer_id: vec4u,
-    // 12 floats the embedder's hooks read (see instanced_mesh_base.wgsl).
-    @location(12) params0: vec4f,
-    @location(13) params1: vec4f,
-    @location(14) params2: vec4f,
+    @location(7) additive_tint_srgba: vec4f,
+    @location(8) picking_layer_id: vec4u,
+    // 24 floats the embedder's hooks read (see instanced_mesh_base.wgsl). The normal transform is
+    // derived from world_from_mesh in the vertex shader, which freed three attribute locations.
+    @location(9) params0: vec4f,
+    @location(10) params1: vec4f,
+    @location(11) params2: vec4f,
+    @location(12) params3: vec4f,
+    @location(13) params4: vec4f,
+    @location(14) params5: vec4f,
     @location(15) outline_mask_ids: vec2u,
 };
