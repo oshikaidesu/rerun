@@ -343,6 +343,12 @@ impl OutlineMaskProcessor {
         }
     }
 
+    /// The object-id mask the outlines are computed from (`MASK_FORMAT`, channel A in `.r`, B in `.g`).
+    /// An editor reads the screen extent of each id from it.
+    pub fn mask_texture(&self) -> &GpuTexture {
+        &self.mask_texture
+    }
+
     pub fn final_voronoi_texture(&self) -> &GpuTexture {
         // Point to the last written voronoi texture
         // We start writing to voronoi_textures[0] and then do `num_steps` ping-pong rendering.

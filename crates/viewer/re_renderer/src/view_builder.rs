@@ -1361,6 +1361,11 @@ impl ViewBuilder {
     ///
     /// The bound surface(s) on the `RenderPass` are expected to be the same format as specified on `Context` creation.
     /// `screen_position` specifies where on the output pass the view is placed.
+    /// The outline object-id mask drawn by [`Self::draw`], if an outline config was given.
+    pub fn outline_mask_texture(&self) -> Option<&GpuTexture> {
+        self.outline_mask_processor.as_ref().map(|p| p.mask_texture())
+    }
+
     pub fn composite(&self, ctx: &RenderContext, pass: &mut wgpu::RenderPass<'_>) {
         re_tracing::profile_function!();
 
