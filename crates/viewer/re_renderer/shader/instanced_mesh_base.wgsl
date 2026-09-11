@@ -49,7 +49,7 @@ struct VertexOut {
     @location(0) @interpolate(perspective, sample)
     color: vec4f, // 0-1 linear space with unmultiplied/separate alpha
 
-    @location(1) @interpolate(perspective, sample)
+    @location(1) @interpolate(perspective, center)
     texcoord: vec2f,
 
     @location(2) @interpolate(perspective, sample)
