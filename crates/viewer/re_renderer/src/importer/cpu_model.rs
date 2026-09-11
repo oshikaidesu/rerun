@@ -67,6 +67,19 @@ impl CpuModel {
         self.bbox
     }
 
+    /// Every vertex of every instance, in model space. An editor fits its selection frame
+    /// to these instead of to the bounding box.
+    pub fn instance_vertex_positions(&self) -> impl Iterator<Item = glam::Vec3> + '_ {
+        self.instances
+            .iter()
+            .filter_map(|instance| Some((instance.world_from_mesh, self.meshes.get(instance.mesh)?)))
+            .flat_map(|(world_from_mesh, mesh)| {
+                mesh.vertex_positions
+                    .iter()
+                    .map(move |position| world_from_mesh.transform_point3(*position))
+            })
+    }
+
     /// Overrides the albedo factor on all materials of all meshes in the model.
     pub fn override_albedo_factor(&mut self, albedo_factor: crate::Rgba) {
         for (_key, mesh) in &mut self.meshes {
