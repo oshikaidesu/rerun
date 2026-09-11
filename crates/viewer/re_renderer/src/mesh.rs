@@ -384,7 +384,8 @@ impl GpuMesh {
                 );
 
                 // TODO(#12223): handle texture transparency
-                let is_transparent = material.albedo_factor.a() < 1.0;
+                let is_transparent = material.albedo_factor.a() < 1.0
+                    || data.vertex_colors.iter().any(|color| color.0[3] < 255);
 
                 materials.push(GpuMaterial {
                     index_range: material.index_range.clone(),
