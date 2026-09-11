@@ -46,7 +46,7 @@ struct VertexOut {
     position: vec4f,
 
     @location(0) @interpolate(perspective, sample)
-    color: vec3f, // 0-1 linear space with unmultiplied/separate alpha
+    color: vec4f, // 0-1 linear space with unmultiplied/separate alpha
 
     @location(1) @interpolate(perspective, sample)
     texcoord: vec2f,
@@ -111,7 +111,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
 
     var out: VertexOut;
     out.position = frame.projection_from_world * vec4f(world_position, 1.0);
-    out.color = linear_from_srgb(in_vertex.color.rgb);
+    out.color = vec4f(linear_from_srgb(in_vertex.color.rgb), in_vertex.color.a);
     out.texcoord = in_vertex.texcoord;
     out.normal_world_space = world_normal;
     // Instance encoded is with pre-multiplied alpha in sRGB.
@@ -151,11 +151,10 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         default: { texture = vec3f(0.0); }
     }
 
-    // TODO(andreas): We could just pass on vertex & texture alpha here and make use of it.
-    // However, we currently don't have the detection code on the CPU side to flag such meshes as transparent.
-    // Therefore, using alpha here would mean that you get it surprise-enabled once you change the tint & albedo factor.
-    // To avoid that, we simply ignore it for now.
-    var albedo = vec4f(texture * in.color, 1.0) * material.albedo_factor;
+    // Vertex paint participates in the material transparency classification on the CPU.
+    // Texture alpha remains subject to the separate texture-transparency contract.
+    var albedo = vec4f(texture * in.color.rgb, 1.0) * material.albedo_factor;
+    albedo *= in.color.a;
 
     // The additive tint linear space with unmultiplied/separate (!!) alpha.
     albedo += vec4f(in.additive_tint_rgba.rgb, 0.0);
@@ -187,6 +186,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
 
 @fragment
 fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
+    if in.color.a <= 0.0 { discard; }
     if clip_outside(clip.plane, in.world_position.xyz) {
         discard;
     }
@@ -195,5 +195,6 @@ fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
 
 @fragment
 fn fs_main_outline_mask(in: VertexOut) -> @location(0) vec2u {
+    if in.color.a <= 0.0 { discard; }
     return in.outline_mask_ids;
 }

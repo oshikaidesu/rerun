@@ -129,7 +129,7 @@ fn lyon_path(contours: &[PathContour]) -> Path {
 }
 
 /// Cuts the path into dashes. Lengths are measured along the flattened path.
-fn dashed(path: &Path, pattern: &[f32], offset: f32) -> Path {
+fn dashed(path: &Path, pattern: &[f32], offset: f32, tolerance: f32) -> Path {
     let pattern: Vec<f32> = pattern
         .iter()
         .copied()
@@ -139,7 +139,7 @@ fn dashed(path: &Path, pattern: &[f32], offset: f32) -> Path {
     if pattern.is_empty() || period <= 0.0 {
         return path.clone();
     }
-    let measurements = PathMeasurements::from_path(path, TOLERANCE);
+    let measurements = PathMeasurements::from_path(path, tolerance);
     let mut sampler = measurements.create_sampler(path, SampleType::Distance);
     let length = sampler.length();
     let mut out = Path::builder();
@@ -297,7 +297,7 @@ impl PathDrawDataBuilder {
         }
         let mut path = lyon_path(contours);
         if let Some((pattern, offset)) = &stroke.dash {
-            path = dashed(&path, pattern, *offset);
+            path = dashed(&path, pattern, *offset, self.tolerance.unwrap_or(TOLERANCE));
         }
         let options = StrokeOptions::tolerance(self.tolerance.unwrap_or(TOLERANCE))
             .with_line_width(stroke.width)
