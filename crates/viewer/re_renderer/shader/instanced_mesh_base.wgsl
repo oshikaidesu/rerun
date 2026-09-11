@@ -195,6 +195,6 @@ fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
 
 @fragment
 fn fs_main_outline_mask(in: VertexOut) -> @location(0) vec2u {
-    if in.color.a <= 0.0 { discard; }
+    if in.color.a <= 0.0 || clip_outside(clip.plane, in.world_position.xyz) { discard; }
     return in.outline_mask_ids;
 }
