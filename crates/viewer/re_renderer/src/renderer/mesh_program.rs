@@ -19,7 +19,8 @@ use crate::wgpu_resources::{
 };
 use crate::{Label, RenderContext, include_file};
 
-/// Hook sources. `None` keeps the default (no displacement / matte dielectric).
+/// Hook sources. `None` keeps the default (no displacement / matte dielectric). Both hooks reach
+/// meshes and rectangles alike: a rectangle shows the field as a shift of where its picture is sampled.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct SurfaceProgramDesc {
     pub label: String,
@@ -136,12 +137,13 @@ impl SurfaceProgram {
         } else {
             "./rectangle_fragment.wgsl".to_owned()
         };
+        let field = program.desc.field.as_deref().unwrap_or(DEFAULT_FIELD);
         let surface = program
             .desc
             .surface
             .as_deref()
             .unwrap_or("fn motolii_surface(in: SurfaceIn) -> vec3f { return in.albedo; }");
-        write_variant(&path, &format!("#import <{import}>\n{surface}\n"))?;
+        write_variant(&path, &format!("#import <{import}>\n{field}\n{surface}\n"))?;
         let shader = ctx.gpu_resources.shader_modules.get_or_create(
             ctx,
             &ShaderModuleDesc {

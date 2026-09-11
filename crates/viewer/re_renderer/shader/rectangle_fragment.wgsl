@@ -3,6 +3,8 @@
 #import <./rectangle.wgsl>
 #import <./utils/srgb.wgsl>
 #import <./utils/interpolation.wgsl>
+#import <./utils/noise.wgsl>
+#import <./utils/field.wgsl>
 
 fn is_magnifying(pixel_coord: vec2f) -> bool {
     return fwidth(pixel_coord.x) < 1.0;
@@ -91,6 +93,44 @@ fn filter_bicubic(colors: array<vec4f, 16>, wx: vec4f, wy: vec4f) -> vec4f {
     return result;
 }
 
+struct FieldSample {
+    texcoord: vec2f,
+    normal: vec3f,
+};
+
+/// The field moves the picture's surface; a flat picture shows that as a shift of where it is sampled.
+/// In-plane offset shifts the sample directly; an offset along the normal is seen through the view
+/// direction (parallax mapping, Kaneko et al. 2001), so a bump leans away with the camera.
+/// The frame is the rectangle's own: top-left corner as origin, extent_u/extent_v as axes.
+fn sample_field(in: VertexOut) -> FieldSample {
+    let eu = rect_info.extent_u;
+    let ev = rect_info.extent_v;
+    let frame_position = in.texcoord.x * eu + in.texcoord.y * ev;
+    let cross_normal = cross(eu, ev);
+    let n = cross_normal / max(length(cross_normal), 1e-6);
+    let field = motolii_field(FieldIn(frame_position, n, rect_info.surface_params));
+    let o = field.offset;
+    let v = view_direction_to_camera(in.world_position);
+    let uu = max(dot(eu, eu), 1e-12);
+    let vv = max(dot(ev, ev), 1e-12);
+    let v_n = dot(v, n);
+    // Limit the parallax at grazing angles, as parallax mapping customarily does.
+    let lean = vec2f(dot(v, eu) / uu, dot(v, ev) / vv) / select(v_n, sign(v_n) * 0.1, abs(v_n) < 0.1);
+    let shift = vec2f(dot(o, eu) / uu, dot(o, ev) / vv) - dot(o, n) * lean;
+    return FieldSample(in.texcoord - shift, field.normal);
+}
+
+fn texture_size() -> vec2f {
+    if rect_info.sample_type == SAMPLE_TYPE_FLOAT {
+        return vec2f(textureDimensions(texture_float).xy);
+    } else if rect_info.sample_type == SAMPLE_TYPE_SINT {
+        return vec2f(textureDimensions(texture_sint).xy);
+    } else if rect_info.sample_type == SAMPLE_TYPE_UINT {
+        return vec2f(textureDimensions(texture_uint).xy);
+    }
+    return vec2f(0.0);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4f {
     if FILTER_SURFACE_FOOTPRINT {
@@ -101,19 +141,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     if clip_outside(rect_info.clip_plane, in.world_position) {
         discard;
     }
-    // Sample the main texture:
+    // Sample the main texture where the field says the surface is:
     var normalized_value: vec4f;
-
-    var texture_dimensions: vec2f;
-    if rect_info.sample_type == SAMPLE_TYPE_FLOAT {
-        texture_dimensions = vec2f(textureDimensions(texture_float).xy);
-    } else if rect_info.sample_type == SAMPLE_TYPE_SINT {
-        texture_dimensions = vec2f(textureDimensions(texture_sint).xy);
-    } else if rect_info.sample_type == SAMPLE_TYPE_UINT {
-        texture_dimensions = vec2f(textureDimensions(texture_uint).xy);
-    }
-
-    let coord = in.texcoord * texture_dimensions;
+    let texture_dimensions = texture_size();
+    let sampled = sample_field(in);
+    let coord = sampled.texcoord * texture_dimensions;
     let active_filter = tex_filter(coord);
 
     switch active_filter {
@@ -195,12 +227,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
         return vec4f(0.0);
     }
     let view_dir = view_direction_to_camera(in.world_position);
-    var normal = normalize(cross(rect_info.extent_u, rect_info.extent_v));
+    var normal = normalize(sampled.normal);
     if dot(normal, view_dir) < 0.0 {
         normal = -normal;
     }
     let surface = SurfaceIn(texture_color.rgb / coverage, normal, view_dir,
-        in.world_position, rect_info.surface_thickness, rect_info.surface_params, in.texcoord, coverage);
+        in.world_position, rect_info.surface_thickness, rect_info.surface_params, sampled.texcoord, coverage);
     return vec4f(motolii_surface(surface) * coverage, coverage) * rect_info.multiplicative_tint;
 }
 
@@ -214,15 +246,8 @@ fn fs_main_outline_mask(in: VertexOut) -> @location(0) vec2u {
     // The outline follows the picture, not the quad: transparent texels leave no mask,
     // so a glyph or a cut-out gets its own silhouette instead of the rectangle's.
     if rect_info.texture_alpha != TEXTURE_ALPHA_OPAQUE {
-        var texture_dimensions: vec2f;
-        if rect_info.sample_type == SAMPLE_TYPE_FLOAT {
-            texture_dimensions = vec2f(textureDimensions(texture_float).xy);
-        } else if rect_info.sample_type == SAMPLE_TYPE_SINT {
-            texture_dimensions = vec2f(textureDimensions(texture_sint).xy);
-        } else if rect_info.sample_type == SAMPLE_TYPE_UINT {
-            texture_dimensions = vec2f(textureDimensions(texture_uint).xy);
-        }
-        let coverage = sample_and_decode(in.texcoord * texture_dimensions, texture_dimensions).a;
+        let texture_dimensions = texture_size();
+        let coverage = sample_and_decode(sample_field(in).texcoord * texture_dimensions, texture_dimensions).a;
         if coverage < 0.5 {
             discard;
         }

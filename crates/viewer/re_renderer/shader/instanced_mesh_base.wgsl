@@ -12,20 +12,7 @@
 //   fn motolii_field(in: FieldIn) -> FieldOut        moves a vertex in the instance frame
 //   fn motolii_surface(in: SurfaceIn) -> vec3f       radiance leaving a shaded fragment
 
-/// Vertex hook input. `frame_position` is the vertex in the instance frame (rotation and scale of
-/// world_from_mesh, no translation), so a field travels with its mesh. `params` are the instance's 24 floats.
-struct FieldIn {
-    frame_position: vec3f,
-    normal: vec3f,
-    params: array<vec4f, 6>,
-};
-
-struct FieldOut {
-    /// Added to the world position.
-    offset: vec3f,
-    /// Replaces the world normal.
-    normal: vec3f,
-};
+#import <./utils/field.wgsl>
 
 #import <./surface.wgsl>
 
