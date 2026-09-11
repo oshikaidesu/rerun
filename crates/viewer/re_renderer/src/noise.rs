@@ -2,7 +2,10 @@
 //! Mirrors `shader/utils/noise.wgsl` so points displaced on the CPU and meshes displaced on the GPU
 //! move through the same field.
 
-use glam::{Vec3, Vec4, Vec4Swizzles as _, Vec3Swizzles as _};
+/// Shared GPU source for image and geometry deformation.
+pub const WGSL: &str = include_str!("../shader/utils/noise.wgsl");
+
+use glam::{Vec3, Vec3Swizzles as _, Vec4, Vec4Swizzles as _};
 
 fn mod289_3(x: Vec3) -> Vec3 {
     x - (x * (1.0 / 289.0)).floor() * 289.0
@@ -51,8 +54,11 @@ pub fn simplex3(v: Vec3) -> f32 {
 
     i = mod289_3(i);
     let p = permute(
-        permute(permute(Vec4::splat(i.z) + Vec4::new(0.0, i1.z, i2.z, 1.0)) + Vec4::splat(i.y) + Vec4::new(0.0, i1.y, i2.y, 1.0))
-            + Vec4::splat(i.x)
+        permute(
+            permute(Vec4::splat(i.z) + Vec4::new(0.0, i1.z, i2.z, 1.0))
+                + Vec4::splat(i.y)
+                + Vec4::new(0.0, i1.y, i2.y, 1.0),
+        ) + Vec4::splat(i.x)
             + Vec4::new(0.0, i1.x, i2.x, 1.0),
     );
 
@@ -88,7 +94,8 @@ pub fn simplex3(v: Vec3) -> f32 {
     p2 *= norm.z;
     p3 *= norm.w;
 
-    let mut m = (Vec4::splat(0.6) - Vec4::new(x0.dot(x0), x1.dot(x1), x2.dot(x2), x3.dot(x3))).max(Vec4::ZERO);
+    let mut m = (Vec4::splat(0.6) - Vec4::new(x0.dot(x0), x1.dot(x1), x2.dot(x2), x3.dot(x3)))
+        .max(Vec4::ZERO);
     m *= m;
     42.0 * (m * m).dot(Vec4::new(p0.dot(x0), p1.dot(x1), p2.dot(x2), p3.dot(x3)))
 }
@@ -117,11 +124,18 @@ mod tests {
         let mut max = 0.0f32;
         let mut varied = false;
         for i in 0..2000 {
-            let p = Vec3::new(i as f32 * 0.173, (i as f32 * 0.311).sin() * 9.0, i as f32 * -0.057);
+            let p = Vec3::new(
+                i as f32 * 0.173,
+                (i as f32 * 0.311).sin() * 9.0,
+                i as f32 * -0.057,
+            );
             let v = simplex3(p);
             assert!(v.is_finite() && v.abs() <= 1.0, "{p:?} -> {v}");
             let near = simplex3(p + Vec3::splat(1e-3));
-            assert!((v - near).abs() < 0.05, "not smooth at {p:?}: {v} vs {near}");
+            assert!(
+                (v - near).abs() < 0.05,
+                "not smooth at {p:?}: {v} vs {near}"
+            );
             max = max.max(v.abs());
             varied |= v.abs() > 0.3;
         }

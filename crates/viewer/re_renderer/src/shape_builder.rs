@@ -89,6 +89,7 @@ impl ShapeBuilder {
             // albedo_factor = BLACK = (0,0,0,1) so the per-instance `additive_tint` becomes
             // the full marker color (see `instanced_mesh.wgsl` for the exact formula).
             materials: smallvec![Material {
+                albedo_is_premultiplied: false,
                 label: label.into(),
                 index_range: 0..index_count,
                 albedo,
@@ -96,5 +97,51 @@ impl ShapeBuilder {
             }],
             bbox,
         }
+    }
+}
+
+/// A textured planar domain for spatial deformation. Positions remain in the caller's
+/// local units; UVs cover the complete (possibly padded) material image.
+pub fn textured_plane_grid(
+    label: &str,
+    min: Vec2,
+    max: Vec2,
+    cells: [u32; 2],
+    texture: crate::resource_managers::GpuTexture2D,
+) -> CpuMesh {
+    let [nx, ny] = cells.map(|n| n.clamp(1, 256));
+    let mut positions = Vec::with_capacity(((nx + 1) * (ny + 1)) as usize);
+    let mut uv = Vec::with_capacity(positions.capacity());
+    for y in 0..=ny {
+        for x in 0..=nx {
+            let t = vec2(x as f32 / nx as f32, y as f32 / ny as f32);
+            positions.push((min + (max - min) * t).extend(0.0));
+            uv.push(t);
+        }
+    }
+    let mut indices = Vec::with_capacity((nx * ny * 2) as usize);
+    for y in 0..ny {
+        for x in 0..nx {
+            let a = y * (nx + 1) + x;
+            indices.push(glam::uvec3(a, a + 1, a + nx + 1));
+            indices.push(glam::uvec3(a + 1, a + nx + 2, a + nx + 1));
+        }
+    }
+    let count = positions.len();
+    CpuMesh {
+        label: label.into(),
+        bbox: macaw::BoundingBox::from_points(positions.iter().copied()),
+        materials: smallvec![Material {
+            label: label.into(),
+            index_range: 0..indices.len() as u32 * 3,
+            albedo: texture,
+            albedo_factor: Rgba::WHITE,
+            albedo_is_premultiplied: true,
+        }],
+        triangle_indices: indices,
+        vertex_positions: positions,
+        vertex_colors: vec![Rgba32Unmul::WHITE; count],
+        vertex_normals: vec![Vec3::Z; count],
+        vertex_texcoords: uv,
     }
 }

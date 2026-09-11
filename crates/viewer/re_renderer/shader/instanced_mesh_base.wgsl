@@ -22,6 +22,7 @@ var albedo_texture: texture_2d<f32>;
 // Keep in sync with `gpu_data::TextureFormat` in mesh.rs
 const FORMAT_RGBA: u32 = 0;
 const FORMAT_GRAYSCALE: u32 = 1;
+const FORMAT_PREMULTIPLIED_RGBA: u32 = 2;
 
 // Keep in sync with `gpu_data::MaterialUniformBuffer` in mesh.rs
 struct MaterialUniformBuffer {
@@ -145,15 +146,17 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     }
     let sample = textureSample(albedo_texture, trilinear_sampler_repeat, in.texcoord);
     var texture: vec3f;
+    var texture_coverage = 1.0;
     switch material.texture_format {
         case FORMAT_RGBA: { texture = linear_from_srgb(sample.rgb); }
         case FORMAT_GRAYSCALE: { texture = linear_from_srgb(sample.rrr); }
+        case FORMAT_PREMULTIPLIED_RGBA: { texture = sample.rgb; texture_coverage = sample.a; }
         default: { texture = vec3f(0.0); }
     }
 
     // Vertex paint participates in the material transparency classification on the CPU.
     // Texture alpha remains subject to the separate texture-transparency contract.
-    var albedo = vec4f(texture * in.color.rgb, 1.0) * material.albedo_factor;
+    var albedo = vec4f(texture * in.color.rgb, texture_coverage) * material.albedo_factor;
     albedo *= in.color.a;
 
     // The additive tint linear space with unmultiplied/separate (!!) alpha.
@@ -187,6 +190,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
 @fragment
 fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
     if in.color.a <= 0.0 { discard; }
+    if material.texture_format == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
     if clip_outside(clip.plane, in.world_position.xyz) {
         discard;
     }
@@ -196,5 +200,6 @@ fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
 @fragment
 fn fs_main_outline_mask(in: VertexOut) -> @location(0) vec2u {
     if in.color.a <= 0.0 || clip_outside(clip.plane, in.world_position.xyz) { discard; }
+    if material.texture_format == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
     return in.outline_mask_ids;
 }

@@ -110,12 +110,13 @@ pub use point_cloud_builder::{PointCloudBatchBuilder, PointCloudBuilder};
 pub use queueable_draw_data::QueueableDrawData;
 pub use rect::{RectF32, RectInt};
 pub use renderer::gpu_data::PositionRadius;
-pub use shape_builder::ShapeBuilder;
+pub use shape_builder::{ShapeBuilder, textured_plane_grid};
 pub use size::Size;
 pub use texture_info::Texture2DBufferInfo;
 pub use transform::RectTransform;
-pub use view_builder::{backdrop_levels_read, 
+pub use view_builder::{
     BlendWithBackground, RenderMode, ViewBuilder, ViewBuilderId, ViewPickingConfiguration,
+    backdrop_levels_read,
 };
 pub use wgpu_resources::{
     BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, GpuBindGroup, GpuBindGroupLayoutHandle,

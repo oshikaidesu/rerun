@@ -407,7 +407,9 @@ impl MeshDrawData {
                             .0
                             .map_or([0, 0, 0, 0], |mask| [mask[0], mask[1], 0, 0]),
                         picking_layer_id: instance.picking_layer_id.into(),
-                        params: std::array::from_fn(|g| std::array::from_fn(|i| instance.params[g * 4 + i])),
+                        params: std::array::from_fn(|g| {
+                            std::array::from_fn(|i| instance.params[g * 4 + i])
+                        }),
                     })?;
 
                     // Transparent instances can not be batched.
@@ -834,6 +836,7 @@ mod tests {
         test_mesh(
             ctx,
             smallvec![Material {
+                albedo_is_premultiplied: false,
                 label: "opaque_material".into(),
                 index_range: 0..3,
                 albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
@@ -847,12 +850,14 @@ mod tests {
             ctx,
             smallvec![
                 Material {
+                    albedo_is_premultiplied: false,
                     label: "opaque_material".into(),
                     index_range: 0..3,
                     albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
                     albedo_factor: crate::Rgba::WHITE
                 },
                 Material {
+                    albedo_is_premultiplied: false,
                     label: "opaque_material".into(),
                     index_range: 0..3,
                     albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),

@@ -238,6 +238,7 @@ fn import_geometry(
             .unwrap_or(crate::Rgba::WHITE);
 
         materials.push(mesh::Material {
+            albedo_is_premultiplied: false,
             label: label.clone(),
             index_range: vertex_offset..vertex_offset + group_vertex_count,
             albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),

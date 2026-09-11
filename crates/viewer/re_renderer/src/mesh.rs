@@ -188,6 +188,8 @@ pub struct Material {
 
     /// Factor applied to the decoded albedo color.
     pub albedo_factor: Rgba,
+    /// The sampled texture contains linear premultiplied RGBA, including coverage.
+    pub albedo_is_premultiplied: bool,
 }
 
 #[derive(Clone)]
@@ -244,6 +246,7 @@ pub(crate) mod gpu_data {
     pub enum TextureFormat {
         Rgba = 0,
         Grayscale = 1,
+        PremultipliedRgba = 2,
     }
 
     /// Keep in sync with [`MaterialUniformBuffer`] in `instanced_mesh.wgsl`
@@ -353,7 +356,9 @@ impl GpuMesh {
                 data.materials.iter().map(|material| {
                     gpu_data::MaterialUniformBuffer::new(
                         material.albedo_factor,
-                        if material.albedo.texture.format().components() == 1 {
+                        if material.albedo_is_premultiplied {
+                            gpu_data::TextureFormat::PremultipliedRgba
+                        } else if material.albedo.texture.format().components() == 1 {
                             gpu_data::TextureFormat::Grayscale
                         } else {
                             gpu_data::TextureFormat::Rgba
@@ -384,7 +389,8 @@ impl GpuMesh {
                 );
 
                 // TODO(#12223): handle texture transparency
-                let is_transparent = material.albedo_factor.a() < 1.0
+                let is_transparent = material.albedo_is_premultiplied
+                    || material.albedo_factor.a() < 1.0
                     || data.vertex_colors.iter().any(|color| color.0[3] < 255);
 
                 materials.push(GpuMaterial {

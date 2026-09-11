@@ -249,6 +249,7 @@ impl PathDrawDataBuilder {
             vertex_normals: vec![glam::Vec3::Z; count],
             vertex_texcoords: vec![glam::Vec2::ZERO; count],
             materials: smallvec![crate::mesh::Material {
+                albedo_is_premultiplied: false,
                 label: label.into(),
                 index_range: 0..self.indices.len() as u32,
                 albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
