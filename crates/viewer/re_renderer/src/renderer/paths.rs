@@ -99,6 +99,7 @@ mod gpu_data {
 pub struct PathDrawDataBuilder {
     vertices: Vec<gpu_data::Vertex>,
     indices: Vec<u32>,
+    tolerance: Option<f32>,
 }
 
 fn lyon_path(contours: &[PathContour]) -> Path {
@@ -129,7 +130,11 @@ fn lyon_path(contours: &[PathContour]) -> Path {
 
 /// Cuts the path into dashes. Lengths are measured along the flattened path.
 fn dashed(path: &Path, pattern: &[f32], offset: f32) -> Path {
-    let pattern: Vec<f32> = pattern.iter().copied().filter(|d| d.is_finite() && *d >= 0.0).collect();
+    let pattern: Vec<f32> = pattern
+        .iter()
+        .copied()
+        .filter(|d| d.is_finite() && *d >= 0.0)
+        .collect();
     let period: f32 = pattern.iter().sum();
     if pattern.is_empty() || period <= 0.0 {
         return path.clone();
@@ -156,9 +161,13 @@ fn dashed(path: &Path, pattern: &[f32], offset: f32) -> Path {
     out.build()
 }
 
-fn fill_buffers(contours: &[PathContour], rule: PathFillRule) -> Option<VertexBuffers<[f32; 2], u32>> {
+fn fill_buffers(
+    contours: &[PathContour],
+    rule: PathFillRule,
+    tolerance: f32,
+) -> Option<VertexBuffers<[f32; 2], u32>> {
     let path = lyon_path(contours);
-    let options = FillOptions::tolerance(TOLERANCE).with_fill_rule(match rule {
+    let options = FillOptions::tolerance(tolerance).with_fill_rule(match rule {
         PathFillRule::NonZero => lyon_tessellation::FillRule::NonZero,
         PathFillRule::EvenOdd => lyon_tessellation::FillRule::EvenOdd,
     });
@@ -175,16 +184,19 @@ fn fill_buffers(contours: &[PathContour], rule: PathFillRule) -> Option<VertexBu
 
 /// The fill as bare triangles (positions and indices), for callers that build meshes out of it.
 pub fn fill_triangles(contours: &[PathContour], rule: PathFillRule) -> (Vec<glam::Vec2>, Vec<u32>) {
-    match fill_buffers(contours, rule) {
-        Some(buffers) => (buffers.vertices.into_iter().map(glam::Vec2::from).collect(), buffers.indices),
+    match fill_buffers(contours, rule, TOLERANCE) {
+        Some(buffers) => (
+            buffers.vertices.into_iter().map(glam::Vec2::from).collect(),
+            buffers.indices,
+        ),
         None => (Vec::new(), Vec::new()),
     }
 }
 
 /// The contours flattened to polylines at the renderer's tolerance, with whether each closes.
 pub fn flattened_contours(contours: &[PathContour]) -> Vec<(Vec<glam::Vec2>, bool)> {
-    use lyon_tessellation::path::iterator::PathIterator as _;
     use lyon_tessellation::path::PathEvent;
+    use lyon_tessellation::path::iterator::PathIterator as _;
     let path = lyon_path(contours);
     let mut out = Vec::new();
     let mut current: Vec<glam::Vec2> = Vec::new();
@@ -204,13 +216,61 @@ pub fn flattened_contours(contours: &[PathContour]) -> Vec<(Vec<glam::Vec2>, boo
 }
 
 impl PathDrawDataBuilder {
-    fn push(&mut self, buffers: VertexBuffers<[f32; 2], u32>, color_at: &dyn Fn(glam::Vec2) -> Rgba32Unmul) {
+    /// Maximum local-space deviation of tessellated curves. The caller derives this
+    /// from the final projection's pixel footprint, independently of texture sizes.
+    pub fn with_tolerance(mut self, tolerance: f32) -> Self {
+        self.tolerance = Some(if tolerance.is_finite() && tolerance > 0.0 {
+            tolerance
+        } else {
+            TOLERANCE
+        });
+        self
+    }
+
+    /// Retain the filled and stroked geometry for a final world-space view.
+    /// Vertex paint stays on the geometry; the material is a constant white texel.
+    pub fn into_mesh(self, ctx: &RenderContext, label: &str) -> crate::mesh::CpuMesh {
+        let positions: Vec<_> = self
+            .vertices
+            .iter()
+            .map(|v| glam::Vec2::from(v.position).extend(0.0))
+            .collect();
+        let count = positions.len();
+        let bbox = macaw::BoundingBox::from_points(positions.iter().copied());
+        crate::mesh::CpuMesh {
+            label: label.into(),
+            triangle_indices: self
+                .indices
+                .chunks_exact(3)
+                .map(|i| glam::uvec3(i[0], i[1], i[2]))
+                .collect(),
+            vertex_positions: positions,
+            vertex_colors: self.vertices.iter().map(|v| Rgba32Unmul(v.color)).collect(),
+            vertex_normals: vec![glam::Vec3::Z; count],
+            vertex_texcoords: vec![glam::Vec2::ZERO; count],
+            materials: smallvec![crate::mesh::Material {
+                label: label.into(),
+                index_range: 0..self.indices.len() as u32,
+                albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
+                albedo_factor: crate::Rgba::WHITE,
+            }],
+            bbox,
+        }
+    }
+
+    fn push(
+        &mut self,
+        buffers: VertexBuffers<[f32; 2], u32>,
+        color_at: &dyn Fn(glam::Vec2) -> Rgba32Unmul,
+    ) {
         let base = self.vertices.len() as u32;
-        self.vertices.extend(buffers.vertices.iter().map(|p| gpu_data::Vertex {
-            position: *p,
-            color: color_at(glam::Vec2::from(*p)).0,
-        }));
-        self.indices.extend(buffers.indices.iter().map(|i| base + i));
+        self.vertices
+            .extend(buffers.vertices.iter().map(|p| gpu_data::Vertex {
+                position: *p,
+                color: color_at(glam::Vec2::from(*p)).0,
+            }));
+        self.indices
+            .extend(buffers.indices.iter().map(|i| base + i));
     }
 
     /// Fill the contours. `color_at` is sampled per tessellated vertex, so a linear gradient
@@ -221,7 +281,7 @@ impl PathDrawDataBuilder {
         rule: PathFillRule,
         color_at: &dyn Fn(glam::Vec2) -> Rgba32Unmul,
     ) {
-        if let Some(buffers) = fill_buffers(contours, rule) {
+        if let Some(buffers) = fill_buffers(contours, rule, self.tolerance.unwrap_or(TOLERANCE)) {
             self.push(buffers, color_at);
         }
     }
@@ -239,7 +299,7 @@ impl PathDrawDataBuilder {
         if let Some((pattern, offset)) = &stroke.dash {
             path = dashed(&path, pattern, *offset);
         }
-        let options = StrokeOptions::tolerance(TOLERANCE)
+        let options = StrokeOptions::tolerance(self.tolerance.unwrap_or(TOLERANCE))
             .with_line_width(stroke.width)
             .with_miter_limit(stroke.miter_limit.max(1.0))
             .with_line_cap(match stroke.cap {
@@ -256,7 +316,9 @@ impl PathDrawDataBuilder {
         let result = StrokeTessellator::new().tessellate_path(
             &path,
             &options,
-            &mut BuffersBuilder::new(&mut buffers, |v: StrokeVertex<'_, '_>| v.position().to_array()),
+            &mut BuffersBuilder::new(&mut buffers, |v: StrokeVertex<'_, '_>| {
+                v.position().to_array()
+            }),
         );
         if result.is_ok() {
             self.push(buffers, color_at);
@@ -284,7 +346,8 @@ impl PathDrawDataBuilder {
                 mapped_at_creation: false,
             },
         );
-        ctx.queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
+        ctx.queue
+            .write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
         let index_buffer = ctx.gpu_resources.buffers.alloc(
             &ctx.device,
             &BufferDesc {
@@ -294,9 +357,14 @@ impl PathDrawDataBuilder {
                 mapped_at_creation: false,
             },
         );
-        ctx.queue.write_buffer(&index_buffer, 0, bytemuck::cast_slice(&self.indices));
+        ctx.queue
+            .write_buffer(&index_buffer, 0, bytemuck::cast_slice(&self.indices));
         PathDrawData {
-            buffers: Some(PathBuffers { vertex_buffer, index_buffer, index_count: self.indices.len() as u32 }),
+            buffers: Some(PathBuffers {
+                vertex_buffer,
+                index_buffer,
+                index_count: self.indices.len() as u32,
+            }),
         }
     }
 }
@@ -324,7 +392,11 @@ impl DrawData for PathDrawData {
         if self.buffers.is_some() {
             collector.add_drawable(
                 DrawPhase::Transparent,
-                DrawDataDrawable { distance_sort_key: 0.0, secondary_sort_key: 0.0, draw_data_payload: 0 },
+                DrawDataDrawable {
+                    distance_sort_key: 0.0,
+                    secondary_sort_key: 0.0,
+                    draw_data_payload: 0,
+                },
             );
         }
     }
@@ -339,7 +411,8 @@ impl Renderer for PathRenderer {
 
     fn create_renderer(ctx: &RenderContext) -> Self {
         let shader_modules = &ctx.gpu_resources.shader_modules;
-        let shader = shader_modules.get_or_create(ctx, &include_shader_module!("../../shader/paths.wgsl"));
+        let shader =
+            shader_modules.get_or_create(ctx, &include_shader_module!("../../shader/paths.wgsl"));
         let render_pipeline = ctx.gpu_resources.render_pipelines.get_or_create(
             ctx,
             &RenderPipelineDesc {
@@ -373,7 +446,10 @@ impl Renderer for PathRenderer {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: ViewBuilder::main_target_default_msaa_state(ctx.render_config(), false),
+                multisample: ViewBuilder::main_target_default_msaa_state(
+                    ctx.render_config(),
+                    false,
+                ),
             },
         );
         Self { render_pipeline }
@@ -389,7 +465,9 @@ impl Renderer for PathRenderer {
         let pipeline = render_pipelines.get(self.render_pipeline)?;
         pass.set_pipeline(pipeline);
         for DrawInstruction { draw_data, .. } in draw_instructions {
-            let Some(buffers) = &draw_data.buffers else { continue };
+            let Some(buffers) = &draw_data.buffers else {
+                continue;
+            };
             pass.set_vertex_buffer(0, buffers.vertex_buffer.slice(..));
             pass.set_index_buffer(buffers.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..buffers.index_count, 0, 0..1);
@@ -403,8 +481,15 @@ mod tests {
     use super::*;
 
     fn square(size: f32) -> PathContour {
-        let v = |x: f32, y: f32| PathVertex { point: glam::vec2(x, y), in_tangent: glam::Vec2::ZERO, out_tangent: glam::Vec2::ZERO };
-        PathContour { closed: true, vertices: vec![v(0.0, 0.0), v(size, 0.0), v(size, size), v(0.0, size)] }
+        let v = |x: f32, y: f32| PathVertex {
+            point: glam::vec2(x, y),
+            in_tangent: glam::Vec2::ZERO,
+            out_tangent: glam::Vec2::ZERO,
+        };
+        PathContour {
+            closed: true,
+            vertices: vec![v(0.0, 0.0), v(size, 0.0), v(size, size), v(0.0, size)],
+        }
     }
 
     /// A square fills as two triangles, an even-odd ring leaves the hole, a dashed open line
@@ -418,33 +503,69 @@ mod tests {
 
         let mut ring = PathDrawDataBuilder::default();
         let mut inner = square(4.0);
-        for v in &mut inner.vertices { v.point += glam::vec2(3.0, 3.0); }
+        for v in &mut inner.vertices {
+            v.point += glam::vec2(3.0, 3.0);
+        }
         ring.fill(&[square(10.0), inner], PathFillRule::EvenOdd, &white);
         assert!(ring.triangle_count() >= 8, "{}", ring.triangle_count());
 
-        let line = PathContour { closed: false, vertices: vec![
-            PathVertex { point: glam::vec2(0.0, 0.0), in_tangent: glam::Vec2::ZERO, out_tangent: glam::Vec2::ZERO },
-            PathVertex { point: glam::vec2(100.0, 0.0), in_tangent: glam::Vec2::ZERO, out_tangent: glam::Vec2::ZERO },
-        ] };
-        let solid = PathStroke { width: 2.0, cap: PathLineCap::Butt, join: PathLineJoin::Miter, miter_limit: 4.0, dash: None };
+        let line = PathContour {
+            closed: false,
+            vertices: vec![
+                PathVertex {
+                    point: glam::vec2(0.0, 0.0),
+                    in_tangent: glam::Vec2::ZERO,
+                    out_tangent: glam::Vec2::ZERO,
+                },
+                PathVertex {
+                    point: glam::vec2(100.0, 0.0),
+                    in_tangent: glam::Vec2::ZERO,
+                    out_tangent: glam::Vec2::ZERO,
+                },
+            ],
+        };
+        let solid = PathStroke {
+            width: 2.0,
+            cap: PathLineCap::Butt,
+            join: PathLineJoin::Miter,
+            miter_limit: 4.0,
+            dash: None,
+        };
         let mut s = PathDrawDataBuilder::default();
         s.stroke(&[line.clone()], &solid, &white);
         assert_eq!(s.triangle_count(), 2);
         let mut d = PathDrawDataBuilder::default();
-        d.stroke(&[line], &PathStroke { dash: Some((vec![10.0, 10.0], 0.0)), ..solid }, &white);
+        d.stroke(
+            &[line],
+            &PathStroke {
+                dash: Some((vec![10.0, 10.0], 0.0)),
+                ..solid
+            },
+            &white,
+        );
         assert_eq!(d.triangle_count(), 10, "5 dashes of 2 triangles");
 
         let (positions, indices) = fill_triangles(&[square(10.0)], PathFillRule::NonZero);
         assert_eq!((positions.len(), indices.len()), (4, 6));
         let mut circle = square(10.0);
-        for v in &mut circle.vertices { v.out_tangent = glam::vec2(2.0, 0.0); v.in_tangent = glam::vec2(-2.0, 0.0); }
+        for v in &mut circle.vertices {
+            v.out_tangent = glam::vec2(2.0, 0.0);
+            v.in_tangent = glam::vec2(-2.0, 0.0);
+        }
         let flat = flattened_contours(&[circle]);
         assert_eq!(flat.len(), 1);
-        assert!(flat[0].1 && flat[0].0.len() > 4, "curves flatten into more than the anchors: {}", flat[0].0.len());
+        assert!(
+            flat[0].1 && flat[0].0.len() > 4,
+            "curves flatten into more than the anchors: {}",
+            flat[0].0.len()
+        );
 
         let seen = std::cell::Cell::new(0usize);
         let mut g = PathDrawDataBuilder::default();
-        g.fill(&[square(10.0)], PathFillRule::NonZero, &|p| { seen.set(seen.get() + 1); Rgba32Unmul([p.x as u8, 0, 0, 255]) });
+        g.fill(&[square(10.0)], PathFillRule::NonZero, &|p| {
+            seen.set(seen.get() + 1);
+            Rgba32Unmul([p.x as u8, 0, 0, 255])
+        });
         assert_eq!(seen.get(), 4);
     }
 }
