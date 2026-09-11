@@ -211,5 +211,21 @@ fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
 
 @fragment
 fn fs_main_outline_mask(in: VertexOut) -> @location(0) vec2u {
+    // The outline follows the picture, not the quad: transparent texels leave no mask,
+    // so a glyph or a cut-out gets its own silhouette instead of the rectangle's.
+    if rect_info.texture_alpha != TEXTURE_ALPHA_OPAQUE {
+        var texture_dimensions: vec2f;
+        if rect_info.sample_type == SAMPLE_TYPE_FLOAT {
+            texture_dimensions = vec2f(textureDimensions(texture_float).xy);
+        } else if rect_info.sample_type == SAMPLE_TYPE_SINT {
+            texture_dimensions = vec2f(textureDimensions(texture_sint).xy);
+        } else if rect_info.sample_type == SAMPLE_TYPE_UINT {
+            texture_dimensions = vec2f(textureDimensions(texture_uint).xy);
+        }
+        let coverage = sample_and_decode(in.texcoord * texture_dimensions, texture_dimensions).a;
+        if coverage < 0.5 {
+            discard;
+        }
+    }
     return rect_info.outline_mask;
 }
