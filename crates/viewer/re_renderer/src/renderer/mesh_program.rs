@@ -35,7 +35,7 @@ pub const DEFAULT_FIELD: &str =
 pub const DEFAULT_SURFACE: &str = "fn motolii_surface(in: SurfaceIn) -> vec3f { return shade_surface(in.albedo, in.normal, in.view_dir, in.world_position, in.thickness, vec4f(1.0, 0.0, 0.0, 1.5), 0.0); }";
 
 pub struct SurfaceProgram {
-    pub(crate) rectangle_pipelines: Option<[GpuRenderPipelineHandle; 2]>,
+    pub(crate) rectangle_pipelines: Option<[GpuRenderPipelineHandle; 5]>,
     pub(crate) desc: SurfaceProgramDesc,
 
     pub(crate) rp_shaded: GpuRenderPipelineHandle,
@@ -124,9 +124,9 @@ impl SurfaceProgram {
             .renderer::<super::mesh_renderer::MeshRenderer>()
             .pipeline_layout;
         let mut program = Self::with_layout(ctx, pipeline_layout, desc)?;
-        let base = ctx
+        let bases = ctx
             .renderer::<super::rectangles::RectangleRenderer>()
-            .surface_pipeline_desc
+            .surface_pipeline_descs
             .clone();
         let path = variant_path(&program.desc).with_extension("rectangle.wgsl");
         let import_of = |name: &str| {
@@ -157,10 +157,12 @@ impl SurfaceProgram {
                 extra_workaround_replacements: surface_sampling_replacements(ctx),
             },
         );
-        let opaque = RenderPipelineDesc {
-            fragment_handle: shader,
+        // Every phase takes the variant's vertex stage — that is where the field moves the grid —
+        // while only the colour phases take its fragment stage. The grid is a list, not the plain
+        // strip of four.
+        let variant = |base: RenderPipelineDesc, colour: bool| RenderPipelineDesc {
             vertex_handle: shader,
-            // The grid is a list, not the plain strip of four.
+            fragment_handle: if colour { shader } else { base.fragment_handle },
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 cull_mode: None,
@@ -168,23 +170,16 @@ impl SurfaceProgram {
             },
             ..base
         };
-        let transparent = RenderPipelineDesc {
-            render_targets: smallvec![Some(wgpu::ColorTargetState {
-                format: ViewBuilder::MAIN_TARGET_COLOR_FORMAT,
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            depth_stencil: Some(ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE_NO_WRITE),
-            ..opaque.clone()
-        };
-        program.rectangle_pipelines = Some([
-            ctx.gpu_resources
-                .render_pipelines
-                .get_or_create(ctx, &opaque),
-            ctx.gpu_resources
-                .render_pipelines
-                .get_or_create(ctx, &transparent),
-        ]);
+        let pipelines = bases
+            .into_iter()
+            .enumerate()
+            .map(|(i, base)| {
+                ctx.gpu_resources
+                    .render_pipelines
+                    .get_or_create(ctx, &variant(base, i < 2))
+            })
+            .collect::<Vec<_>>();
+        program.rectangle_pipelines = Some(pipelines.try_into().expect("five phases"));
         Ok(program)
     }
 

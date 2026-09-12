@@ -483,6 +483,18 @@ mod gpu_data {
     }
 }
 
+/// Which of a surface program's rectangle pipelines a draw phase uses.
+pub(crate) fn surface_phase_index(phase: DrawPhase) -> usize {
+    match phase {
+        DrawPhase::Opaque => 0,
+        DrawPhase::Transparent => 1,
+        DrawPhase::PickingLayer => 2,
+        DrawPhase::OutlineMask => 3,
+        DrawPhase::OutlineMaskNoDepth => 4,
+        _ => unreachable!("rectangles are not drawn in {phase:?}"),
+    }
+}
+
 #[derive(Clone)]
 struct RectangleInstance {
     surface: Option<Arc<super::SurfaceProgram>>,
@@ -655,7 +667,8 @@ impl RectangleDrawData {
 }
 
 pub struct RectangleRenderer {
-    pub(crate) surface_pipeline_desc: RenderPipelineDesc,
+    /// Bases the surface variants mirror, in the order `surface_phase_index` gives.
+    pub(crate) surface_pipeline_descs: [RenderPipelineDesc; 5],
     render_pipeline_color_opaque: GpuRenderPipelineHandle,
     render_pipeline_color_transparent: GpuRenderPipelineHandle,
     render_pipeline_picking_layer: GpuRenderPipelineHandle,
@@ -797,43 +810,43 @@ impl Renderer for RectangleRenderer {
         let render_pipeline_color_transparent =
             render_pipelines.get_or_create(ctx, &render_pipeline_desc_color_transparent);
 
-        let render_pipeline_picking_layer = render_pipelines.get_or_create(
-            ctx,
-            &(RenderPipelineDesc {
-                label: "RectangleRenderer::render_pipeline_picking_layer".into(),
-                fragment_entrypoint: "fs_main_picking_layer".into(),
-                render_targets: smallvec![Some(PickingLayerProcessor::PICKING_LAYER_FORMAT.into())],
-                depth_stencil: PickingLayerProcessor::PICKING_LAYER_DEPTH_STATE,
-                multisample: PickingLayerProcessor::PICKING_LAYER_MSAA_STATE,
-                ..render_pipeline_desc_color_opaque.clone()
-            }),
-        );
-        let render_pipeline_outline_mask = render_pipelines.get_or_create(
-            ctx,
-            &(RenderPipelineDesc {
-                label: "RectangleRenderer::render_pipeline_outline_mask".into(),
-                fragment_entrypoint: "fs_main_outline_mask".into(),
-                render_targets: smallvec![Some(OutlineMaskProcessor::MASK_FORMAT.into())],
-                depth_stencil: OutlineMaskProcessor::MASK_DEPTH_STATE,
-                multisample: OutlineMaskProcessor::mask_default_msaa_state(ctx.device_caps().tier),
-                ..render_pipeline_desc_color_opaque.clone()
-            }),
-        );
+        let render_pipeline_desc_picking_layer = RenderPipelineDesc {
+            label: "RectangleRenderer::render_pipeline_picking_layer".into(),
+            fragment_entrypoint: "fs_main_picking_layer".into(),
+            render_targets: smallvec![Some(PickingLayerProcessor::PICKING_LAYER_FORMAT.into())],
+            depth_stencil: PickingLayerProcessor::PICKING_LAYER_DEPTH_STATE,
+            multisample: PickingLayerProcessor::PICKING_LAYER_MSAA_STATE,
+            ..render_pipeline_desc_color_opaque.clone()
+        };
+        let render_pipeline_picking_layer =
+            render_pipelines.get_or_create(ctx, &render_pipeline_desc_picking_layer);
+        let render_pipeline_desc_outline_mask = RenderPipelineDesc {
+            label: "RectangleRenderer::render_pipeline_outline_mask".into(),
+            fragment_entrypoint: "fs_main_outline_mask".into(),
+            render_targets: smallvec![Some(OutlineMaskProcessor::MASK_FORMAT.into())],
+            depth_stencil: OutlineMaskProcessor::MASK_DEPTH_STATE,
+            multisample: OutlineMaskProcessor::mask_default_msaa_state(ctx.device_caps().tier),
+            ..render_pipeline_desc_color_opaque.clone()
+        };
+        let render_pipeline_outline_mask =
+            render_pipelines.get_or_create(ctx, &render_pipeline_desc_outline_mask);
         // Outline mask render pipeline for special case of overlapping coplanar rectangles.
-        let render_pipeline_outline_mask_no_depth = render_pipelines.get_or_create(
-            ctx,
-            &(RenderPipelineDesc {
-                label: "RectangleRenderer::render_pipeline_outline_mask_no_depth".into(),
-                fragment_entrypoint: "fs_main_outline_mask".into(),
-                render_targets: smallvec![Some(OutlineMaskProcessor::MASK_FORMAT.into())],
-                depth_stencil: OutlineMaskProcessor::MASK_DEPTH_STATE_NO_DEPTH,
-                multisample: OutlineMaskProcessor::mask_default_msaa_state(ctx.device_caps().tier),
-                ..render_pipeline_desc_color_opaque.clone()
-            }),
-        );
+        let render_pipeline_desc_outline_mask_no_depth = RenderPipelineDesc {
+            label: "RectangleRenderer::render_pipeline_outline_mask_no_depth".into(),
+            depth_stencil: OutlineMaskProcessor::MASK_DEPTH_STATE_NO_DEPTH,
+            ..render_pipeline_desc_outline_mask.clone()
+        };
+        let render_pipeline_outline_mask_no_depth =
+            render_pipelines.get_or_create(ctx, &render_pipeline_desc_outline_mask_no_depth);
 
         Self {
-            surface_pipeline_desc: render_pipeline_desc_color_opaque,
+            surface_pipeline_descs: [
+                render_pipeline_desc_color_opaque,
+                render_pipeline_desc_color_transparent,
+                render_pipeline_desc_picking_layer,
+                render_pipeline_desc_outline_mask,
+                render_pipeline_desc_outline_mask_no_depth,
+            ],
             render_pipeline_color_opaque,
             render_pipeline_color_transparent,
             render_pipeline_picking_layer,
@@ -871,19 +884,16 @@ impl Renderer for RectangleRenderer {
         {
             for drawable in *drawables {
                 let rectangles = &draw_data.instances[drawable.draw_data_payload as usize];
-                // Surface variants draw the field's grid as a list; every other phase keeps the
-                // plain strip of four.
+                // A surface variant draws the field's grid as a list in every phase, so the
+                // silhouette the field makes is what gets picked and outlined too.
                 let grid = rectangles.field_grid.max(1);
-                let (handle, vertices) = match (&rectangles.surface, phase) {
-                    (Some(program), DrawPhase::Opaque) => (
-                        program.rectangle_pipelines.expect("public surface program")[0],
+                let (handle, vertices) = match &rectangles.surface {
+                    Some(program) => (
+                        program.rectangle_pipelines.expect("public surface program")
+                            [surface_phase_index(phase)],
                         6 * grid * grid,
                     ),
-                    (Some(program), DrawPhase::Transparent) => (
-                        program.rectangle_pipelines.expect("public surface program")[1],
-                        6 * grid * grid,
-                    ),
-                    _ => (pipeline_handle, 4),
+                    None => (pipeline_handle, 4),
                 };
                 pass.set_pipeline(render_pipelines.get(handle)?);
                 pass.set_bind_group(1, &rectangles.bind_group, &[]);
