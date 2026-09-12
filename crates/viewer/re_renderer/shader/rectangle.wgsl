@@ -86,6 +86,9 @@ struct UniformBuffer {
     clip_plane: vec4f,
     surface_params: array<vec4f, 6>,
     surface_thickness: f32,
+
+    /// Cells per side of the grid the vertex stage moves with the field.
+    field_grid: f32,
 };
 
 @group(1) @binding(0)

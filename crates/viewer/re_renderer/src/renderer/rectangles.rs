@@ -258,6 +258,8 @@ pub struct RectangleOptions {
     pub surface_params: [f32; 24],
     /// Optical slab thickness in world units; independent of the planar geometry.
     pub surface_thickness: f32,
+    /// Cells per side of the grid the field moves. 1 draws the plain two triangles.
+    pub field_grid: u32,
 }
 
 impl Default for RectangleOptions {
@@ -272,6 +274,7 @@ impl Default for RectangleOptions {
             surface: None,
             surface_params: [0.0; 24],
             surface_thickness: 1.0,
+            field_grid: 1,
         }
     }
 }
@@ -356,7 +359,8 @@ mod gpu_data {
 
         surface_params: [wgpu_buffer_types::Vec4; 6],
         surface_thickness: f32,
-        _surface_padding: [f32; 3],
+        field_grid: f32,
+        _surface_padding: [f32; 2],
         _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 15],
     }
 
@@ -470,6 +474,7 @@ mod gpu_data {
                         .into()
                 }),
                 surface_thickness: rectangle.options.surface_thickness,
+                field_grid: rectangle.options.field_grid.max(1) as f32,
                 _surface_padding: Default::default(),
                 _row_padding: Default::default(),
                 _end_padding: Default::default(),
@@ -481,6 +486,7 @@ mod gpu_data {
 #[derive(Clone)]
 struct RectangleInstance {
     surface: Option<Arc<super::SurfaceProgram>>,
+    field_grid: u32,
     sorting_position: glam::Vec3A,
     secondary_sort_key: f32,
     force_transparent: bool,
@@ -610,6 +616,7 @@ impl RectangleDrawData {
 
             instances.push(RectangleInstance {
                 surface: rectangle.options.surface.clone(),
+                field_grid: rectangle.options.field_grid.max(1),
                 sorting_position: cluster_info.sorting_position,
                 secondary_sort_key: rectangle.options.depth_offset as f32,
                 force_transparent,
@@ -864,18 +871,23 @@ impl Renderer for RectangleRenderer {
         {
             for drawable in *drawables {
                 let rectangles = &draw_data.instances[drawable.draw_data_payload as usize];
-                let handle = match (&rectangles.surface, phase) {
-                    (Some(program), DrawPhase::Opaque) => {
-                        program.rectangle_pipelines.expect("public surface program")[0]
-                    }
-                    (Some(program), DrawPhase::Transparent) => {
-                        program.rectangle_pipelines.expect("public surface program")[1]
-                    }
-                    _ => pipeline_handle,
+                // Surface variants draw the field's grid as a list; every other phase keeps the
+                // plain strip of four.
+                let grid = rectangles.field_grid.max(1);
+                let (handle, vertices) = match (&rectangles.surface, phase) {
+                    (Some(program), DrawPhase::Opaque) => (
+                        program.rectangle_pipelines.expect("public surface program")[0],
+                        6 * grid * grid,
+                    ),
+                    (Some(program), DrawPhase::Transparent) => (
+                        program.rectangle_pipelines.expect("public surface program")[1],
+                        6 * grid * grid,
+                    ),
+                    _ => (pipeline_handle, 4),
                 };
                 pass.set_pipeline(render_pipelines.get(handle)?);
                 pass.set_bind_group(1, &rectangles.bind_group, &[]);
-                pass.draw(0..4, 0..1);
+                pass.draw(0..vertices, 0..1);
             }
         }
 

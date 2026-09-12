@@ -109,6 +109,11 @@ fn sample_field(in: VertexOut) -> FieldSample {
     let cross_normal = cross(eu, ev);
     let n = cross_normal / max(length(cross_normal), 1e-6);
     let field = motolii_field(FieldIn(frame_position, n, rect_info.surface_params));
+    if rect_info.field_grid >= 2.0 {
+        // The vertex stage moved the picture itself; shifting the sample as well would apply the
+        // field twice. The normal is still the field's.
+        return FieldSample(in.texcoord, field.normal);
+    }
     let o = field.offset;
     let v = view_direction_to_camera(in.world_position);
     let uu = max(dot(eu, eu), 1e-12);

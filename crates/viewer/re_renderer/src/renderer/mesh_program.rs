@@ -129,21 +129,26 @@ impl SurfaceProgram {
             .surface_pipeline_desc
             .clone();
         let path = variant_path(&program.desc).with_extension("rectangle.wgsl");
-        let import = if cfg!(load_shaders_from_disk) {
-            base_path()
-                .with_file_name("rectangle_fragment.wgsl")
-                .display()
-                .to_string()
-        } else {
-            "./rectangle_fragment.wgsl".to_owned()
+        let import_of = |name: &str| {
+            if cfg!(load_shaders_from_disk) {
+                base_path().with_file_name(name).display().to_string()
+            } else {
+                format!("./{name}")
+            }
         };
+        let import = import_of("rectangle_fragment.wgsl");
+        // The vertex stage is part of the variant too: it calls the field to move the grid.
+        let import_vs = import_of("rectangle_vertex.wgsl");
         let field = program.desc.field.as_deref().unwrap_or(DEFAULT_FIELD);
         let surface = program
             .desc
             .surface
             .as_deref()
             .unwrap_or("fn motolii_surface(in: SurfaceIn) -> vec3f { return in.albedo; }");
-        write_variant(&path, &format!("#import <{import}>\n{field}\n{surface}\n"))?;
+        write_variant(
+            &path,
+            &format!("#import <{import}>\n#import <{import_vs}>\n{field}\n{surface}\n"),
+        )?;
         let shader = ctx.gpu_resources.shader_modules.get_or_create(
             ctx,
             &ShaderModuleDesc {
@@ -154,6 +159,13 @@ impl SurfaceProgram {
         );
         let opaque = RenderPipelineDesc {
             fragment_handle: shader,
+            vertex_handle: shader,
+            // The grid is a list, not the plain strip of four.
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
             ..base
         };
         let transparent = RenderPipelineDesc {
