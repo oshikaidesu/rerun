@@ -190,6 +190,10 @@ pub struct Material {
     pub albedo_factor: Rgba,
     /// The sampled texture contains linear premultiplied RGBA, including coverage.
     pub albedo_is_premultiplied: bool,
+    /// The vertex field (`motolii_field`) is evaluated at the vertex's texcoord (x, y, 0) instead of
+    /// its position: a stroked path stores the centreline point there, so both sides of a line move
+    /// together and the line keeps its width under the field.
+    pub field_anchor: bool,
 }
 
 #[derive(Clone)]
@@ -255,14 +259,16 @@ pub(crate) mod gpu_data {
     pub struct MaterialUniformBuffer {
         albedo_factor: ecolor::Rgba,
         texture_format: wgpu_buffer_types::U32RowPadded,
-        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 2],
+        field_anchor: wgpu_buffer_types::U32RowPadded,
+        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 3],
     }
 
     impl MaterialUniformBuffer {
-        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat) -> Self {
+        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat, field_anchor: bool) -> Self {
             Self {
                 albedo_factor,
                 texture_format: (texture_format as u32).into(),
+                field_anchor: u32::from(field_anchor).into(),
                 end_padding: Default::default(),
             }
         }
@@ -363,6 +369,7 @@ impl GpuMesh {
                         } else {
                             gpu_data::TextureFormat::Rgba
                         },
+                        material.field_anchor,
                     )
                 }),
             );

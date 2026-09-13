@@ -28,6 +28,8 @@ const FORMAT_PREMULTIPLIED_RGBA: u32 = 2;
 struct MaterialUniformBuffer {
     albedo_factor: vec4f,
     texture_format: u32,
+    // 1: evaluate the vertex field at texcoord (x, y, 0) — stroked paths keep their centreline there.
+    field_anchor: u32,
 };
 
 @group(1) @binding(1)
@@ -106,7 +108,18 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     }
     var world_position = frame_position + translation;
     let params = array<vec4f, 6>(in_instance.params0, in_instance.params1, in_instance.params2, in_instance.params3, in_instance.params4, in_instance.params5);
-    let field = motolii_field(FieldIn(frame_position, world_normal, params));
+    // Where the field is sampled: the vertex, or its anchor (a stroke's centreline point) so a line's
+    // two sides move together and the width survives.
+    var sample = in_vertex.position;
+    if material.field_anchor != 0u {
+        sample = vec3f(in_vertex.texcoord, 0.0);
+    }
+    let frame_sample = vec3f(
+        dot(in_instance.world_from_mesh_row_0.xyz, sample),
+        dot(in_instance.world_from_mesh_row_1.xyz, sample),
+        dot(in_instance.world_from_mesh_row_2.xyz, sample),
+    );
+    let field = motolii_field(FieldIn(frame_sample, world_normal, params));
     world_position += field.offset;
     world_normal = field.normal;
 

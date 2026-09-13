@@ -90,6 +90,7 @@ impl ShapeBuilder {
             // the full marker color (see `instanced_mesh.wgsl` for the exact formula).
             materials: smallvec![Material {
                 albedo_is_premultiplied: false,
+                field_anchor: false,
                 label: label.into(),
                 index_range: 0..index_count,
                 albedo,
@@ -137,6 +138,7 @@ pub fn textured_plane_grid(
             albedo: texture,
             albedo_factor: Rgba::WHITE,
             albedo_is_premultiplied: true,
+            field_anchor: false,
         }],
         triangle_indices: indices,
         vertex_positions: positions,

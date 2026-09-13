@@ -552,7 +552,8 @@ impl Renderer for MeshRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        // The vertex stage reads `field_anchor`.
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -837,6 +838,7 @@ mod tests {
             ctx,
             smallvec![Material {
                 albedo_is_premultiplied: false,
+                field_anchor: false,
                 label: "opaque_material".into(),
                 index_range: 0..3,
                 albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
@@ -851,6 +853,7 @@ mod tests {
             smallvec![
                 Material {
                     albedo_is_premultiplied: false,
+                    field_anchor: false,
                     label: "opaque_material".into(),
                     index_range: 0..3,
                     albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
@@ -858,6 +861,7 @@ mod tests {
                 },
                 Material {
                     albedo_is_premultiplied: false,
+                    field_anchor: false,
                     label: "opaque_material".into(),
                     index_range: 0..3,
                     albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),

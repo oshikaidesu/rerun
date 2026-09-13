@@ -91,6 +91,7 @@ pub fn load_obj_from_buffer(
             // TODO(andreas): proper material loading
             materials: smallvec![Material {
                 albedo_is_premultiplied: false,
+                field_anchor: false,
                 label: "default material".into(),
                 index_range: 0..mesh.indices.len() as u32,
                 albedo: texture.clone(),

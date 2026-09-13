@@ -98,6 +98,8 @@ mod gpu_data {
 #[derive(Default)]
 pub struct PathDrawDataBuilder {
     vertices: Vec<gpu_data::Vertex>,
+    /// Per vertex: where a vertex field samples (a stroke's centreline point; a fill's own position).
+    anchors: Vec<[f32; 2]>,
     indices: Vec<u32>,
     tolerance: Option<f32>,
 }
@@ -247,9 +249,11 @@ impl PathDrawDataBuilder {
             vertex_positions: positions,
             vertex_colors: self.vertices.iter().map(|v| Rgba32Unmul(v.color)).collect(),
             vertex_normals: vec![glam::Vec3::Z; count],
-            vertex_texcoords: vec![glam::Vec2::ZERO; count],
+            // The anchors ride in the texcoords (the albedo is a constant texel, so texcoords are free).
+            vertex_texcoords: self.anchors.iter().map(|a| glam::Vec2::from(*a)).collect(),
             materials: smallvec![crate::mesh::Material {
                 albedo_is_premultiplied: false,
+                field_anchor: false,
                 label: label.into(),
                 index_range: 0..self.indices.len() as u32,
                 albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
@@ -261,15 +265,16 @@ impl PathDrawDataBuilder {
 
     fn push(
         &mut self,
-        buffers: VertexBuffers<[f32; 2], u32>,
+        buffers: VertexBuffers<([f32; 2], [f32; 2]), u32>,
         color_at: &dyn Fn(glam::Vec2) -> Rgba32Unmul,
     ) {
         let base = self.vertices.len() as u32;
         self.vertices
-            .extend(buffers.vertices.iter().map(|p| gpu_data::Vertex {
+            .extend(buffers.vertices.iter().map(|(p, _)| gpu_data::Vertex {
                 position: *p,
                 color: color_at(glam::Vec2::from(*p)).0,
             }));
+        self.anchors.extend(buffers.vertices.iter().map(|(_, a)| *a));
         self.indices
             .extend(buffers.indices.iter().map(|i| base + i));
     }
@@ -283,7 +288,8 @@ impl PathDrawDataBuilder {
         color_at: &dyn Fn(glam::Vec2) -> Rgba32Unmul,
     ) {
         if let Some(buffers) = fill_buffers(contours, rule, self.tolerance.unwrap_or(TOLERANCE)) {
-            self.push(buffers, color_at);
+            let anchored = VertexBuffers { vertices: buffers.vertices.iter().map(|p| (*p, *p)).collect(), indices: buffers.indices };
+            self.push(anchored, color_at);
         }
     }
 
@@ -313,12 +319,12 @@ impl PathDrawDataBuilder {
                 PathLineJoin::Round => lyon_tessellation::LineJoin::Round,
                 PathLineJoin::Bevel => lyon_tessellation::LineJoin::Bevel,
             });
-        let mut buffers: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
+        let mut buffers: VertexBuffers<([f32; 2], [f32; 2]), u32> = VertexBuffers::new();
         let result = StrokeTessellator::new().tessellate_path(
             &path,
             &options,
             &mut BuffersBuilder::new(&mut buffers, |v: StrokeVertex<'_, '_>| {
-                v.position().to_array()
+                (v.position().to_array(), v.position_on_path().to_array())
             }),
         );
         if result.is_ok() {
