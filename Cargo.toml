@@ -324,7 +324,10 @@ natord = "1.0"
 ndarray = "0.16.1" # pinned by `lance-index` (lance family) and `numpy` to 0.16; 0.17 would duplicate.
 never = "0.1.0"
 nohash-hasher = "0.2.0"
-notify = { version = "8.2", features = ["macos_kqueue"] }
+# macos_kqueue は上流が .rrd の追い読み(#7475)で立てた。kqueue の backend は dir の書き込みで
+# 「watch していない最初の file」を新規と誤認し(notify 8.2.0 kqueue.rs:175)、2 回目以降の変更を落とす。
+# Motolii は shader と効果の dir を見張るので、既定の FSEvents に戻す(2026-09-13、生の FSEvents で正しさを確認)。
+notify = "8.2"
 # `unicode-segmentation` is off so that match indices are plain `char` indices,
 # which is what we index with when highlighting matched characters.
 nucleo-matcher = { version = "0.3.1", default-features = false, features = [
