@@ -27,12 +27,10 @@ const FORMAT_PREMULTIPLIED_RGBA: u32 = 2;
 // Keep in sync with `gpu_data::MaterialUniformBuffer` in mesh.rs
 struct MaterialUniformBuffer {
     albedo_factor: vec4f,
-    // Each u32 sits on its own 16-byte row (`U32RowPadded` in mesh.rs).
-    texture_format: u32,
-    _pad_format: vec3u,
+    // Each u32 sits on its own 16-byte row (`U32RowPadded` in mesh.rs): read `.x`.
+    texture_format: vec4u,
     // 1: evaluate the vertex field at texcoord (x, y, 0) — stroked paths keep their centreline there.
-    field_anchor: u32,
-    _pad_anchor: vec3u,
+    field_anchor: vec4u,
 };
 
 @group(1) @binding(1)
@@ -114,7 +112,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     // Where the field is sampled: the vertex, or its anchor (a stroke's centreline point) so a line's
     // two sides move together and the width survives.
     var sample = in_vertex.position;
-    if material.field_anchor != 0u {
+    if material.field_anchor.x != 0u {
         sample = vec3f(in_vertex.texcoord, 0.0);
     }
     let frame_sample = vec3f(
@@ -163,7 +161,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     let sample = textureSample(albedo_texture, trilinear_sampler_repeat, in.texcoord);
     var texture: vec3f;
     var texture_coverage = 1.0;
-    switch material.texture_format {
+    switch material.texture_format.x {
         case FORMAT_RGBA: { texture = linear_from_srgb(sample.rgb); }
         case FORMAT_GRAYSCALE: { texture = linear_from_srgb(sample.rrr); }
         case FORMAT_PREMULTIPLIED_RGBA: { texture = sample.rgb; texture_coverage = sample.a; }
@@ -206,7 +204,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
 @fragment
 fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
     if in.color.a <= 0.0 { discard; }
-    if material.texture_format == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
+    if material.texture_format.x == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
     if clip_outside(clip.plane, in.world_position.xyz) {
         discard;
     }
@@ -216,6 +214,6 @@ fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
 @fragment
 fn fs_main_outline_mask(in: VertexOut) -> @location(0) vec2u {
     if in.color.a <= 0.0 || clip_outside(clip.plane, in.world_position.xyz) { discard; }
-    if material.texture_format == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
+    if material.texture_format.x == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
     return in.outline_mask_ids;
 }
