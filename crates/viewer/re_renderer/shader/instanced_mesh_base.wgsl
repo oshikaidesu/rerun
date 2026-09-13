@@ -27,9 +27,12 @@ const FORMAT_PREMULTIPLIED_RGBA: u32 = 2;
 // Keep in sync with `gpu_data::MaterialUniformBuffer` in mesh.rs
 struct MaterialUniformBuffer {
     albedo_factor: vec4f,
+    // Each u32 sits on its own 16-byte row (`U32RowPadded` in mesh.rs).
     texture_format: u32,
+    _pad_format: vec3u,
     // 1: evaluate the vertex field at texcoord (x, y, 0) — stroked paths keep their centreline there.
     field_anchor: u32,
+    _pad_anchor: vec3u,
 };
 
 @group(1) @binding(1)
