@@ -113,6 +113,9 @@ struct MeshBatch {
     /// Position of the batch in world space, used for distance sorting.
     position: glam::Vec3A,
 
+    /// See [`DrawDataDrawable::layer_sort_key`]. Only transparent batches (one instance each) carry one.
+    layer_sort_key: i32,
+
     /// Shader variant; `None` is the renderer's default.
     program: Option<Arc<MeshProgram>>,
 }
@@ -152,7 +155,8 @@ impl DrawData for MeshDrawData {
         for (batch_idx, batch) in self.batches.iter().enumerate() {
             collector.add_drawable_for_phase(
                 batch.draw_phase,
-                DrawDataDrawable::from_world_position(view_info, batch.position, batch_idx as _),
+                DrawDataDrawable::from_world_position(view_info, batch.position, batch_idx as _)
+                    .with_layer_sort_key(batch.layer_sort_key),
             );
         }
     }
@@ -266,6 +270,17 @@ impl MeshDrawData {
         ctx: &RenderContext,
         instances: &[GpuMeshInstance],
         clip: crate::ClipPlane,
+    ) -> Result<Self, CpuWriteGpuReadError> {
+        Self::new_layered(ctx, instances, clip, &[])
+    }
+
+    /// Like [`Self::new_clipped`], with a 2D layer per instance (see [`DrawDataDrawable::layer_sort_key`]).
+    /// Missing keys are layer 0.
+    pub fn new_layered(
+        ctx: &RenderContext,
+        instances: &[GpuMeshInstance],
+        clip: crate::ClipPlane,
+        layer_sort_keys: &[i32],
     ) -> Result<Self, CpuWriteGpuReadError> {
         re_tracing::profile_function!();
 
@@ -422,6 +437,7 @@ impl MeshDrawData {
                             has_transparent_tint: !instance.additive_tint.is_opaque(),
                             cull_mode: batch_key.cull_mode,
                             position: instance.world_from_mesh.transform_point3a(mesh_center),
+                            layer_sort_key: layer_sort_keys.get(*source_index).copied().unwrap_or(0),
                             program: program.clone(),
                         });
                     }
@@ -446,6 +462,7 @@ impl MeshDrawData {
                                 cull_mode: batch_key.cull_mode,
                                 // Ordering isn't super important, so for many instances just pick the first as representative.
                                 position: chunk[0].1.world_from_mesh.transform_point3a(mesh_center),
+                                layer_sort_key: 0,
                                 program: program.clone(),
                             });
                         }
@@ -467,6 +484,7 @@ impl MeshDrawData {
                     position: first_instance
                         .world_from_mesh
                         .transform_point3a(mesh_center),
+                    layer_sort_key: 0,
                     program: program.clone(),
                 });
 

@@ -75,6 +75,7 @@ impl DrawData for WorldGridDrawData {
                 // therefore we want to draw it before any other "real" transparentobjects.
                 distance_sort_key: f32::MAX,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_payload: 0,
             },
         );

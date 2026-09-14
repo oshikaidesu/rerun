@@ -64,6 +64,7 @@ impl DrawData for GenericSkyboxDrawData {
             DrawDataDrawable {
                 distance_sort_key: 0.0,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_payload: 0,
             },
         );

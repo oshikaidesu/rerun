@@ -80,6 +80,11 @@ pub struct DrawDataDrawable {
     /// drawables next to each other.
     pub secondary_sort_key: f32,
 
+    /// 2D layer index for the transparent phase, compared before [`Self::distance_sort_key`]:
+    /// lower layers are drawn first, so a higher layer stays on top wherever it sits on screen.
+    /// Everything that doesn't opt in shares layer 0 and keeps pure distance sorting.
+    pub layer_sort_key: i32,
+
     /// Key for identifying the drawable within the [`DrawData`] that produced it..
     ///
     /// This is effectively an arbitrary payload whose meaning is dependent on the drawable type
@@ -106,6 +111,7 @@ impl DrawDataDrawable {
         Self {
             distance_sort_key: world_position.distance_squared(view_info.camera_world_position),
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_payload,
         }
     }
@@ -113,6 +119,12 @@ impl DrawDataDrawable {
     #[inline]
     pub fn with_secondary_sort_key(mut self, secondary_sort_key: f32) -> Self {
         self.secondary_sort_key = secondary_sort_key;
+        self
+    }
+
+    #[inline]
+    pub fn with_layer_sort_key(mut self, layer_sort_key: i32) -> Self {
+        self.layer_sort_key = layer_sort_key;
         self
     }
 }

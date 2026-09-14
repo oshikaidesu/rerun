@@ -501,6 +501,7 @@ struct RectangleInstance {
     field_grid: u32,
     sorting_position: glam::Vec3A,
     secondary_sort_key: f32,
+    layer_sort_key: i32,
     force_transparent: bool,
     bind_group: GpuBindGroup,
     outline_mask_draw_phase: Option<DrawPhase>,
@@ -529,7 +530,8 @@ impl DrawData for RectangleDrawData {
                 instance.sorting_position,
                 index as u32,
             )
-            .with_secondary_sort_key(instance.secondary_sort_key);
+            .with_secondary_sort_key(instance.secondary_sort_key)
+            .with_layer_sort_key(instance.layer_sort_key);
 
             collector.add_drawable(
                 if instance.force_transparent || instance.has_transparency {
@@ -548,6 +550,19 @@ impl DrawData for RectangleDrawData {
 }
 
 impl RectangleDrawData {
+    /// Like [`Self::new`], with a 2D layer per rectangle (see [`DrawDataDrawable::layer_sort_key`]).
+    pub fn new_layered(
+        ctx: &RenderContext,
+        rectangles: &[TexturedRect],
+        layer_sort_keys: &[i32],
+    ) -> Result<Self, RectangleError> {
+        let mut data = Self::new(ctx, rectangles)?;
+        for (instance, key) in data.instances.iter_mut().zip(layer_sort_keys) {
+            instance.layer_sort_key = *key;
+        }
+        Ok(data)
+    }
+
     pub fn new(ctx: &RenderContext, rectangles: &[TexturedRect]) -> Result<Self, RectangleError> {
         re_tracing::profile_function!();
 
@@ -631,6 +646,7 @@ impl RectangleDrawData {
                 field_grid: rectangle.options.field_grid.max(1),
                 sorting_position: cluster_info.sorting_position,
                 secondary_sort_key: rectangle.options.depth_offset as f32,
+                layer_sort_key: 0,
                 force_transparent,
                 bind_group: ctx.gpu_resources.bind_groups.alloc(
                     &ctx.device,
