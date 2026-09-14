@@ -59,6 +59,18 @@ use crate::{
 /// [`DrawData`] specific payload that is injected into the otherwise type agnostic [`crate::Drawable`].
 pub type DrawDataDrawablePayload = u32;
 
+/// Caller-chosen ordering for one instance of a draw data (see [`DrawDataDrawable`]).
+///
+/// `position` replaces the point the distance sort measures from, and `secondary` replaces the
+/// tie-breaker: drawables that lie on one plane can share the plane's point and order by their
+/// stacking index instead of by where each sits on the plane.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DrawOrder {
+    pub layer: i32,
+    pub position: Option<glam::Vec3A>,
+    pub secondary: Option<f32>,
+}
+
 /// A single drawable item within a given [`DrawData`].
 ///
 /// The general expectation is that there's a rough one to one relationship between

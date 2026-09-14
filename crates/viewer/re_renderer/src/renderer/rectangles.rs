@@ -556,9 +556,25 @@ impl RectangleDrawData {
         rectangles: &[TexturedRect],
         layer_sort_keys: &[i32],
     ) -> Result<Self, RectangleError> {
+        let orders: Vec<_> = layer_sort_keys.iter().map(|&layer| super::DrawOrder { layer, ..Default::default() }).collect();
+        Self::new_ordered(ctx, rectangles, &orders)
+    }
+
+    /// Like [`Self::new`], with a [`super::DrawOrder`] per rectangle.
+    pub fn new_ordered(
+        ctx: &RenderContext,
+        rectangles: &[TexturedRect],
+        orders: &[super::DrawOrder],
+    ) -> Result<Self, RectangleError> {
         let mut data = Self::new(ctx, rectangles)?;
-        for (instance, key) in data.instances.iter_mut().zip(layer_sort_keys) {
-            instance.layer_sort_key = *key;
+        for (instance, order) in data.instances.iter_mut().zip(orders) {
+            instance.layer_sort_key = order.layer;
+            if let Some(position) = order.position {
+                instance.sorting_position = position;
+            }
+            if let Some(secondary) = order.secondary {
+                instance.secondary_sort_key = secondary;
+            }
         }
         Ok(data)
     }

@@ -116,6 +116,9 @@ struct MeshBatch {
     /// See [`DrawDataDrawable::layer_sort_key`]. Only transparent batches (one instance each) carry one.
     layer_sort_key: i32,
 
+    /// See [`DrawDataDrawable::secondary_sort_key`].
+    secondary_sort_key: f32,
+
     /// Shader variant; `None` is the renderer's default.
     program: Option<Arc<MeshProgram>>,
 }
@@ -156,7 +159,8 @@ impl DrawData for MeshDrawData {
             collector.add_drawable_for_phase(
                 batch.draw_phase,
                 DrawDataDrawable::from_world_position(view_info, batch.position, batch_idx as _)
-                    .with_layer_sort_key(batch.layer_sort_key),
+                    .with_layer_sort_key(batch.layer_sort_key)
+                    .with_secondary_sort_key(batch.secondary_sort_key),
             );
         }
     }
@@ -281,6 +285,17 @@ impl MeshDrawData {
         instances: &[GpuMeshInstance],
         clip: crate::ClipPlane,
         layer_sort_keys: &[i32],
+    ) -> Result<Self, CpuWriteGpuReadError> {
+        let orders: Vec<_> = layer_sort_keys.iter().map(|&layer| super::DrawOrder { layer, ..Default::default() }).collect();
+        Self::new_ordered(ctx, instances, clip, &orders)
+    }
+
+    /// Like [`Self::new_clipped`], with a [`super::DrawOrder`] per instance. Missing orders are the default.
+    pub fn new_ordered(
+        ctx: &RenderContext,
+        instances: &[GpuMeshInstance],
+        clip: crate::ClipPlane,
+        orders: &[super::DrawOrder],
     ) -> Result<Self, CpuWriteGpuReadError> {
         re_tracing::profile_function!();
 
@@ -436,8 +451,9 @@ impl MeshDrawData {
                             draw_phase: DrawPhase::Transparent,
                             has_transparent_tint: !instance.additive_tint.is_opaque(),
                             cull_mode: batch_key.cull_mode,
-                            position: instance.world_from_mesh.transform_point3a(mesh_center),
-                            layer_sort_key: layer_sort_keys.get(*source_index).copied().unwrap_or(0),
+                            position: orders.get(*source_index).and_then(|o| o.position).unwrap_or_else(|| instance.world_from_mesh.transform_point3a(mesh_center)),
+                            layer_sort_key: orders.get(*source_index).map_or(0, |o| o.layer),
+                            secondary_sort_key: orders.get(*source_index).and_then(|o| o.secondary).unwrap_or(0.0),
                             program: program.clone(),
                         });
                     }
@@ -463,6 +479,7 @@ impl MeshDrawData {
                                 // Ordering isn't super important, so for many instances just pick the first as representative.
                                 position: chunk[0].1.world_from_mesh.transform_point3a(mesh_center),
                                 layer_sort_key: 0,
+                                secondary_sort_key: 0.0,
                                 program: program.clone(),
                             });
                         }
@@ -485,6 +502,7 @@ impl MeshDrawData {
                         .world_from_mesh
                         .transform_point3a(mesh_center),
                     layer_sort_key: 0,
+                    secondary_sort_key: 0.0,
                     program: program.clone(),
                 });
 
