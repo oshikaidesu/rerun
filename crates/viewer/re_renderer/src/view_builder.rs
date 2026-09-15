@@ -321,6 +321,26 @@ pub struct TargetConfiguration {
 #[derive(Clone)]
 pub struct MotionBuffer(pub crate::wgpu_resources::GpuBuffer);
 
+impl MotionBuffer {
+    /// A pooled storage buffer holding `entries` offsets (vec4 each), zeroed on first allocation.
+    pub fn new(ctx: &RenderContext, entries: u64) -> Self {
+        Self(ctx.gpu_resources.buffers.alloc(
+            &ctx.device,
+            &crate::wgpu_resources::BufferDesc {
+                label: "motolii-motion".into(),
+                size: entries.max(1) * 16,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        ))
+    }
+
+    /// The buffer a compute pass writes the offsets into.
+    pub fn buffer(&self) -> &wgpu::Buffer {
+        &self.0
+    }
+}
+
 impl std::fmt::Debug for MotionBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "MotionBuffer({} bytes)", self.0.size())
