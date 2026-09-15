@@ -82,6 +82,19 @@ var scene_reflection: texture_2d<f32>;
 @group(0) @binding(10)
 var light_cookie: texture_2d<f32>;
 
+/// Per-object world offsets written on the GPU by the embedder (xyz). Entry `n - 1` moves an object whose
+/// last param is `n`; 0 = not moved.
+@group(0) @binding(11)
+var<storage, read> motion: array<vec4f>;
+
+fn motion_offset(slot: f32) -> vec3f {
+    let n = u32(max(slot, 0.0) + 0.5);
+    if n == 0u || n > arrayLength(&motion) {
+        return vec3f(0.0);
+    }
+    return motion[n - 1u].xyz;
+}
+
 // See config.rs#DeviceTier
 const DEVICE_TIER_GLES = 0u;
 const DEVICE_TIER_WEBGPU = 1u;

@@ -107,7 +107,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     if det != 0.0 {
         world_normal = (cross(col1, col2) * in_vertex.normal.x + cross(col2, col0) * in_vertex.normal.y + cross(col0, col1) * in_vertex.normal.z) / det;
     }
-    var world_position = frame_position + translation;
+    var world_position = frame_position + translation + motion_offset(in_instance.params5.w);
     let params = array<vec4f, 6>(in_instance.params0, in_instance.params1, in_instance.params2, in_instance.params3, in_instance.params4, in_instance.params5);
     // Where the field is sampled: the vertex, or its anchor (a stroke's centreline point) so a line's
     // two sides move together and the width survives.

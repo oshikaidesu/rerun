@@ -21,7 +21,7 @@ fn vs_main(@builtin(vertex_index) v_idx: u32) -> VertexOut {
     let cross_normal = cross(rect_info.extent_u, rect_info.extent_v);
     let normal = cross_normal / max(length(cross_normal), 1e-6);
     let field = motolii_field(FieldIn(frame_position, normal, rect_info.surface_params));
-    let pos = rect_info.top_left_corner_position + frame_position + field.offset;
+    let pos = rect_info.top_left_corner_position + frame_position + field.offset + motion_offset(rect_info.surface_params[5].w);
 
     var out: VertexOut;
     out.position = apply_depth_offset(frame.projection_from_world * vec4f(pos, 1.0), rect_info.depth_offset);

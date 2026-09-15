@@ -78,6 +78,8 @@ pub struct GlobalBindings {
     trilinear_sampler_repeat: GpuSamplerHandle,
     equirect_sampler: GpuSamplerHandle,
     screen_sampler: GpuSamplerHandle,
+    /// Bound as `motion` when the view has none: one zeroed entry.
+    zero_motion: crate::wgpu_resources::GpuBuffer,
 }
 
 /// Textures bound in group 0 for the environment (see [`crate::Environment`]).
@@ -91,6 +93,8 @@ pub struct EnvironmentBindings {
     pub reflection: GpuTextureHandle,
     /// Blockers seen from the sun (premultiplied tint × coverage). Zero texture when there is none.
     pub light_cookie: GpuTextureHandle,
+    /// Per-object world offsets written by the embedder on the GPU (see [`crate::view_builder::TargetConfiguration::motion`]).
+    pub motion: Option<crate::wgpu_resources::GpuBufferHandle>,
 }
 
 impl GlobalBindings {
@@ -206,6 +210,17 @@ impl GlobalBindings {
                             },
                             count: None,
                         },
+                        // Motion: per-object world offsets computed on the GPU, read by vertex stages.
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 11,
+                            visibility: wgpu::ShaderStages::VERTEX,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
                     ],
                 },
             ),
@@ -259,6 +274,15 @@ impl GlobalBindings {
                     ..Default::default()
                 },
             ),
+            zero_motion: pools.buffers.alloc(
+                device,
+                &crate::wgpu_resources::BufferDesc {
+                    label: "GlobalBindings::zero_motion".into(),
+                    size: 16,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                },
+            ),
             screen_sampler: pools.samplers.get_or_create(
                 device,
                 &SamplerDesc {
@@ -302,6 +326,11 @@ impl GlobalBindings {
                     BindGroupEntry::Sampler(self.screen_sampler),
                     BindGroupEntry::DefaultTextureView(environment.reflection),
                     BindGroupEntry::DefaultTextureView(environment.light_cookie),
+                    BindGroupEntry::Buffer {
+                        handle: environment.motion.unwrap_or(self.zero_motion.handle),
+                        offset: 0,
+                        size: None,
+                    },
                 ],
                 layout: self.layout,
             },

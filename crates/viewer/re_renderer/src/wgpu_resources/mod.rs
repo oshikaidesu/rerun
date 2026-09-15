@@ -16,7 +16,7 @@ mod bind_group_pool;
 pub use bind_group_pool::{BindGroupDesc, BindGroupEntry, GpuBindGroup, GpuBindGroupPool};
 
 mod buffer_pool;
-pub use buffer_pool::{BufferDesc, GpuBuffer, GpuBufferPool};
+pub use buffer_pool::{BufferDesc, GpuBuffer, GpuBufferHandle, GpuBufferPool};
 
 mod pipeline_layout_pool;
 pub use pipeline_layout_pool::{GpuPipelineLayoutHandle, GpuPipelineLayoutPool, PipelineLayoutDesc};

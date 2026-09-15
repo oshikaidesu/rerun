@@ -311,6 +311,20 @@ pub struct TargetConfiguration {
     /// World geometry closer to the camera than this (along its forward axis) fades out, gone at a third
     /// of it. 0 = never.
     pub near_fade_distance: f32,
+    /// Per-object world offsets (`array<vec4f>`, xyz = offset), written on the GPU by the embedder. An instance
+    /// whose last param (`params[23]`, WGSL `params[5].w`) is `n > 0` is moved by entry `n - 1` in every vertex
+    /// stage. `None` binds a zeroed entry.
+    pub motion: Option<MotionBuffer>,
+}
+
+/// A storage buffer of per-object world offsets (see [`TargetConfiguration::motion`]).
+#[derive(Clone)]
+pub struct MotionBuffer(pub crate::wgpu_resources::GpuBuffer);
+
+impl std::fmt::Debug for MotionBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MotionBuffer({} bytes)", self.0.size())
+    }
 }
 
 fn environment_bindings(
@@ -328,6 +342,7 @@ fn environment_bindings(
             .as_ref()
             .map_or(zero, |r| r.atlas.handle()),
         light_cookie: config.light.as_ref().map_or(zero, |l| l.cookie.handle()),
+        motion: config.motion.as_ref().map(|m| m.0.handle),
     }
 }
 
@@ -354,6 +369,7 @@ impl Default for TargetConfiguration {
             light: None,
             light_capture: false,
             near_fade_distance: 0.0,
+            motion: None,
         }
     }
 }
