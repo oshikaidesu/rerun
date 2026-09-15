@@ -65,7 +65,9 @@ pub struct FrameUniformBuffer {
     /// rgb: the sun's tint; w: 1 while the light cookie is captured.
     pub sun_color: wgpu_buffer_types::Vec4,
     pub light_uv_from_world: wgpu_buffer_types::Mat4,
-    pub _end_padding: [wgpu_buffer_types::PaddingRow; 3],
+    /// x: camera-forward depth below which world geometry starts to fade (0 = never); it is gone at x / 3.
+    pub near_fade: wgpu_buffer_types::Vec4,
+    pub _end_padding: [wgpu_buffer_types::PaddingRow; 2],
 }
 
 /// Global bindings which are always available on bind group 0 for all [`crate::renderer::Renderer`].

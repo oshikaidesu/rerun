@@ -238,7 +238,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     }
     let surface = SurfaceIn(texture_color.rgb / coverage, normal, view_dir,
         in.world_position, rect_info.surface_thickness, rect_info.surface_params, sampled.texcoord, coverage);
-    return vec4f(motolii_surface(surface) * coverage, coverage) * rect_info.multiplicative_tint;
+    return vec4f(motolii_surface(surface) * coverage, coverage) * rect_info.multiplicative_tint * near_fade(in.world_position);
 }
 
 @fragment

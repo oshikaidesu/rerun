@@ -51,6 +51,8 @@ struct FrameUniformBuffer {
     sun_color: vec4f,
     /// World → light cookie uv (orthographic, looking along the sun).
     light_uv_from_world: mat4x4f,
+    /// x: camera-forward depth below which world geometry starts to fade (0 = never); it is gone at x / 3.
+    near_fade: vec4f,
 };
 
 @group(0) @binding(0)
@@ -83,3 +85,13 @@ var light_cookie: texture_2d<f32>;
 // See config.rs#DeviceTier
 const DEVICE_TIER_GLES = 0u;
 const DEVICE_TIER_WEBGPU = 1u;
+
+/// How much of a fragment survives the camera's near fade (Unity Camera Fading, Godot Distance Fade).
+fn near_fade(world_position: vec3f) -> f32 {
+    let start = frame.near_fade.x;
+    if start <= 0.0 {
+        return 1.0;
+    }
+    let depth = dot(world_position - frame.camera_position, frame.camera_forward);
+    return smoothstep(start / 3.0, start, depth);
+}

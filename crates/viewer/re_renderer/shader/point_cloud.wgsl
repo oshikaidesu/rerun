@@ -176,6 +176,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     if frame.deterministic_rendering == 1 {
         coverage = step(0.5, coverage);
     }
+    coverage *= near_fade(in.world_position);
 
     // As per benchmarking on Apple Silicon M5, putting a discard can be
     // a significant pessimization in high-overdraw situations and at best only a very mild optimization.

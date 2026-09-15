@@ -308,6 +308,9 @@ pub struct TargetConfiguration {
     pub light: Option<crate::environment::SunLight>,
     /// This view *is* the cookie capture: surfaces write what they let through instead of shading.
     pub light_capture: bool,
+    /// World geometry closer to the camera than this (along its forward axis) fades out, gone at a third
+    /// of it. 0 = never.
+    pub near_fade_distance: f32,
 }
 
 fn environment_bindings(
@@ -350,6 +353,7 @@ impl Default for TargetConfiguration {
             scene_reflection: None,
             light: None,
             light_capture: false,
+            near_fade_distance: 0.0,
         }
     }
 }
@@ -693,6 +697,7 @@ impl ViewBuilder {
                 .as_ref()
                 .map_or(glam::Mat4::IDENTITY, |l| l.uv_from_world)
                 .into(),
+            near_fade: glam::vec4(config.near_fade_distance.max(0.0), 0.0, 0.0, 0.0).into(),
             _end_padding: Default::default(),
         };
         let frame_uniform_buffer = create_and_fill_uniform_buffer(
@@ -1001,6 +1006,7 @@ impl ViewBuilder {
                 .as_ref()
                 .map_or(glam::Mat4::IDENTITY, |l| l.uv_from_world)
                 .into(),
+            near_fade: glam::vec4(config.near_fade_distance.max(0.0), 0.0, 0.0, 0.0).into(),
             _end_padding: Default::default(),
         };
         let frame_uniform_buffer = create_and_fill_uniform_buffer(
