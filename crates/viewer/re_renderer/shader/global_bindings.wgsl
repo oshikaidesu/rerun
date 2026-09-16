@@ -82,17 +82,27 @@ var scene_reflection: texture_2d<f32>;
 @group(0) @binding(10)
 var light_cookie: texture_2d<f32>;
 
-/// Per-object world offsets written on the GPU by the embedder (xyz). Entry `n - 1` moves an object whose
-/// last param is `n`; 0 = not moved.
+/// Per-object world motion written on the GPU by the embedder: three vec4 per object —
+/// `(offset.xyz, turn)`, `(centre.xyz, _)`, `(axis.xyz, _)`. The object whose last param is `n`
+/// reads entry `n - 1`; 0 = not moved. A vertex is turned by `turn` radians about `axis` through
+/// `centre`, then offset.
 @group(0) @binding(11)
 var<storage, read> motion: array<vec4f>;
 
-fn motion_offset(slot: f32) -> vec3f {
+fn motion_offset(slot: f32, world_position: vec3f) -> vec3f {
     let n = u32(max(slot, 0.0) + 0.5);
-    if n == 0u || n > arrayLength(&motion) {
+    if n == 0u || n * 3u > arrayLength(&motion) {
         return vec3f(0.0);
     }
-    return motion[n - 1u].xyz;
+    let base = (n - 1u) * 3u;
+    let move_turn = motion[base];
+    var turned = vec3f(0.0);
+    if move_turn.w != 0.0 {
+        let r = world_position - motion[base + 1u].xyz;
+        let axis = motion[base + 2u].xyz;
+        turned = r * cos(move_turn.w) + cross(axis, r) * sin(move_turn.w) + axis * dot(axis, r) * (1.0 - cos(move_turn.w)) - r;
+    }
+    return move_turn.xyz + turned;
 }
 
 // See config.rs#DeviceTier

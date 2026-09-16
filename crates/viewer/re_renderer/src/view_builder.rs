@@ -322,13 +322,14 @@ pub struct TargetConfiguration {
 pub struct MotionBuffer(pub crate::wgpu_resources::GpuBuffer);
 
 impl MotionBuffer {
-    /// A pooled storage buffer holding `entries` offsets (vec4 each), zeroed on first allocation.
+    /// A pooled storage buffer holding `entries` objects' motion (three vec4 each: offset + turn,
+    /// centre, axis), zeroed on first allocation.
     pub fn new(ctx: &RenderContext, entries: u64) -> Self {
         Self(ctx.gpu_resources.buffers.alloc(
             &ctx.device,
             &crate::wgpu_resources::BufferDesc {
                 label: "motolii-motion".into(),
-                size: entries.max(1) * 16,
+                size: entries.max(1) * 48,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             },
