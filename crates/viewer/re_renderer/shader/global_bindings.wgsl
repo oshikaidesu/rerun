@@ -101,6 +101,11 @@ fn motion_entry(slot: f32) -> u32 {
     return n;
 }
 
+fn cubic(p0: vec3f, p1: vec3f, p2: vec3f, p3: vec3f, t: f32) -> vec3f {
+    let u = 1.0 - t;
+    return u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3;
+}
+
 fn motion_offset(slot: f32, world_position: vec3f) -> vec3f {
     let n = motion_entry(slot);
     if n == 0u {
@@ -118,6 +123,18 @@ fn motion_offset(slot: f32, world_position: vec3f) -> vec3f {
         let t = clamp(dot(world_position - centre_scale.xyz, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
         return mix(move_turn.xyz, motion[base + 3u].xyz, t);
     }
+    // A rope entry (kind 2) spans two entries: the four above, then `(c0 drawn)`, `(c1 drawn)`, `(c0 now)`, `(c1 now)`.
+    // The picture is a cubic through A, c0, c1, B; the vertex moves by the difference between that cubic
+    // with the live ends and control points, and the cubic that was drawn.
+    if axis_kind.w == 2.0 && (n + 1u) * MOTION_STRIDE <= arrayLength(&motion) {
+        let ab = axis_kind.xyz;
+        let a = centre_scale.xyz;
+        let b = a + ab;
+        let t = clamp(dot(world_position - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+        let drawn = cubic(a, motion[base + 4u].xyz, motion[base + 5u].xyz, b, t);
+        let live = cubic(a + move_turn.xyz, motion[base + 6u].xyz, motion[base + 7u].xyz, b + motion[base + 3u].xyz, t);
+        return live - drawn;
+    }
     let scale = select(centre_scale.w, 1.0, centre_scale.w == 0.0);
     var placed = vec3f(0.0);
     if move_turn.w != 0.0 || scale != 1.0 {
@@ -133,7 +150,7 @@ fn motion_offset(slot: f32, world_position: vec3f) -> vec3f {
 /// `(tint.rgb, opacity)` of the object, `vec4f(1.0)` when it carries no motion entry.
 fn motion_tint(slot: f32) -> vec4f {
     let n = motion_entry(slot);
-    if n == 0u || motion[(n - 1u) * MOTION_STRIDE + 2u].w == 1.0 {
+    if n == 0u || motion[(n - 1u) * MOTION_STRIDE + 2u].w != 0.0 {
         return vec4f(1.0);
     }
     return motion[(n - 1u) * MOTION_STRIDE + 3u];

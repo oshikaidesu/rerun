@@ -706,6 +706,9 @@ pub struct RectangleRenderer {
     render_pipeline_picking_layer: GpuRenderPipelineHandle,
     render_pipeline_outline_mask: GpuRenderPipelineHandle,
     render_pipeline_outline_mask_no_depth: GpuRenderPipelineHandle,
+    /// The plain pipelines again, subdivided (`field_grid` cells, TriangleList) for rectangles that carry
+    /// no surface program but need vertices to move — in `surface_phase_index` order.
+    grid_pipelines: [GpuRenderPipelineHandle; 5],
     bind_group_layout: GpuBindGroupLayoutHandle,
 }
 
@@ -871,19 +874,42 @@ impl Renderer for RectangleRenderer {
         let render_pipeline_outline_mask_no_depth =
             render_pipelines.get_or_create(ctx, &render_pipeline_desc_outline_mask_no_depth);
 
+        let shader_module_grid_vs = ctx.gpu_resources.shader_modules.get_or_create(
+            ctx,
+            &include_shader_module!("../../shader/rectangle_grid_vs.wgsl"),
+        );
+        let surface_pipeline_descs = [
+            render_pipeline_desc_color_opaque,
+            render_pipeline_desc_color_transparent,
+            render_pipeline_desc_picking_layer,
+            render_pipeline_desc_outline_mask,
+            render_pipeline_desc_outline_mask_no_depth,
+        ];
+        let grid_pipelines = std::array::from_fn(|i| {
+            let base = &surface_pipeline_descs[i];
+            render_pipelines.get_or_create(
+                ctx,
+                &RenderPipelineDesc {
+                    label: format!("{}_grid", base.label).into(),
+                    vertex_handle: shader_module_grid_vs,
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        cull_mode: None,
+                        ..Default::default()
+                    },
+                    ..base.clone()
+                },
+            )
+        });
+
         Self {
-            surface_pipeline_descs: [
-                render_pipeline_desc_color_opaque,
-                render_pipeline_desc_color_transparent,
-                render_pipeline_desc_picking_layer,
-                render_pipeline_desc_outline_mask,
-                render_pipeline_desc_outline_mask_no_depth,
-            ],
+            surface_pipeline_descs,
             render_pipeline_color_opaque,
             render_pipeline_color_transparent,
             render_pipeline_picking_layer,
             render_pipeline_outline_mask,
             render_pipeline_outline_mask_no_depth,
+            grid_pipelines,
             bind_group_layout,
         }
     }
@@ -925,6 +951,7 @@ impl Renderer for RectangleRenderer {
                             [surface_phase_index(phase)],
                         6 * grid * grid,
                     ),
+                    None if grid > 1 => (self.grid_pipelines[surface_phase_index(phase)], 6 * grid * grid),
                     None => (pipeline_handle, 4),
                 };
                 pass.set_pipeline(render_pipelines.get(handle)?);

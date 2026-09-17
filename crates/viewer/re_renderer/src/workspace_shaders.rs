@@ -134,6 +134,12 @@ pub fn init() {
     }
 
     {
+        let virtpath = Path::new("shader/rectangle_grid_vs.wgsl");
+        let content = include_str!("../shader/rectangle_grid_vs.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
         let virtpath = Path::new("shader/rectangle_vertex.wgsl");
         let content = include_str!("../shader/rectangle_vertex.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
