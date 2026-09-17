@@ -83,7 +83,8 @@ var scene_reflection: texture_2d<f32>;
 var light_cookie: texture_2d<f32>;
 
 /// Per-object motion written on the GPU by the embedder: four vec4 per object —
-/// `(offset.xyz, turn)`, `(centre.xyz, scale)`, `(axis.xyz, _)`, `(tint.rgb, opacity)`. The object whose
+/// `(offset.xyz, turn)`, `(centre.xyz, scale)`, `(axis.xyz, kind)`, `(tint.rgb, opacity)`. Kind 0 is a thing;
+/// kind 1 is a connector between two things (see `motion_offset`). The object whose
 /// last param is `n` reads entry `n - 1`; 0 = not moved. A vertex is scaled by `scale` and turned by
 /// `turn` radians about `axis` through `centre`, then offset. A fragment is multiplied by `tint` and
 /// `opacity` (premultiplied, so opacity scales colour and coverage alike).
@@ -108,11 +109,20 @@ fn motion_offset(slot: f32, world_position: vec3f) -> vec3f {
     let base = (n - 1u) * MOTION_STRIDE;
     let move_turn = motion[base];
     let centre_scale = motion[base + 1u];
+    let axis_kind = motion[base + 2u];
+    // A connector entry (kind 1): `(offset at A, _)`, `(A, _)`, `(B - A, 1)`, `(offset at B, _)`.
+    // Each vertex takes the offset of the end it is nearer to, blended along A→B, so a line between two
+    // moved things keeps touching both.
+    if axis_kind.w == 1.0 {
+        let ab = axis_kind.xyz;
+        let t = clamp(dot(world_position - centre_scale.xyz, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+        return mix(move_turn.xyz, motion[base + 3u].xyz, t);
+    }
     let scale = select(centre_scale.w, 1.0, centre_scale.w == 0.0);
     var placed = vec3f(0.0);
     if move_turn.w != 0.0 || scale != 1.0 {
         let r = (world_position - centre_scale.xyz) * scale;
-        let axis = motion[base + 2u].xyz;
+        let axis = axis_kind.xyz;
         let c = cos(move_turn.w);
         let s = sin(move_turn.w);
         placed = r * c + cross(axis, r) * s + axis * dot(axis, r) * (1.0 - c) - (world_position - centre_scale.xyz);
@@ -123,7 +133,7 @@ fn motion_offset(slot: f32, world_position: vec3f) -> vec3f {
 /// `(tint.rgb, opacity)` of the object, `vec4f(1.0)` when it carries no motion entry.
 fn motion_tint(slot: f32) -> vec4f {
     let n = motion_entry(slot);
-    if n == 0u {
+    if n == 0u || motion[(n - 1u) * MOTION_STRIDE + 2u].w == 1.0 {
         return vec4f(1.0);
     }
     return motion[(n - 1u) * MOTION_STRIDE + 3u];
