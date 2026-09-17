@@ -177,6 +177,8 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     // The additive tint linear space with unmultiplied/separate (!!) alpha.
     albedo += vec4f(in.additive_tint_rgba.rgb, 0.0);
     albedo *= in.additive_tint_rgba.a;
+    let tint = motion_tint(in.params5.w);
+    albedo = vec4f(albedo.rgb * tint.rgb, albedo.a) * tint.a;
     albedo *= near_fade(in.world_position.xyz);
 
     if all(in.normal_world_space == vec3f(0.0, 0.0, 0.0)) {

@@ -82,27 +82,51 @@ var scene_reflection: texture_2d<f32>;
 @group(0) @binding(10)
 var light_cookie: texture_2d<f32>;
 
-/// Per-object world motion written on the GPU by the embedder: three vec4 per object —
-/// `(offset.xyz, turn)`, `(centre.xyz, _)`, `(axis.xyz, _)`. The object whose last param is `n`
-/// reads entry `n - 1`; 0 = not moved. A vertex is turned by `turn` radians about `axis` through
-/// `centre`, then offset.
+/// Per-object motion written on the GPU by the embedder: four vec4 per object —
+/// `(offset.xyz, turn)`, `(centre.xyz, scale)`, `(axis.xyz, _)`, `(tint.rgb, opacity)`. The object whose
+/// last param is `n` reads entry `n - 1`; 0 = not moved. A vertex is scaled by `scale` and turned by
+/// `turn` radians about `axis` through `centre`, then offset. A fragment is multiplied by `tint` and
+/// `opacity` (premultiplied, so opacity scales colour and coverage alike).
 @group(0) @binding(11)
 var<storage, read> motion: array<vec4f>;
 
-fn motion_offset(slot: f32, world_position: vec3f) -> vec3f {
+const MOTION_STRIDE = 4u;
+
+fn motion_entry(slot: f32) -> u32 {
     let n = u32(max(slot, 0.0) + 0.5);
-    if n == 0u || n * 3u > arrayLength(&motion) {
+    if n == 0u || n * MOTION_STRIDE > arrayLength(&motion) {
+        return 0u;
+    }
+    return n;
+}
+
+fn motion_offset(slot: f32, world_position: vec3f) -> vec3f {
+    let n = motion_entry(slot);
+    if n == 0u {
         return vec3f(0.0);
     }
-    let base = (n - 1u) * 3u;
+    let base = (n - 1u) * MOTION_STRIDE;
     let move_turn = motion[base];
-    var turned = vec3f(0.0);
-    if move_turn.w != 0.0 {
-        let r = world_position - motion[base + 1u].xyz;
+    let centre_scale = motion[base + 1u];
+    let scale = select(centre_scale.w, 1.0, centre_scale.w == 0.0);
+    var placed = vec3f(0.0);
+    if move_turn.w != 0.0 || scale != 1.0 {
+        let r = (world_position - centre_scale.xyz) * scale;
         let axis = motion[base + 2u].xyz;
-        turned = r * cos(move_turn.w) + cross(axis, r) * sin(move_turn.w) + axis * dot(axis, r) * (1.0 - cos(move_turn.w)) - r;
+        let c = cos(move_turn.w);
+        let s = sin(move_turn.w);
+        placed = r * c + cross(axis, r) * s + axis * dot(axis, r) * (1.0 - c) - (world_position - centre_scale.xyz);
     }
-    return move_turn.xyz + turned;
+    return move_turn.xyz + placed;
+}
+
+/// `(tint.rgb, opacity)` of the object, `vec4f(1.0)` when it carries no motion entry.
+fn motion_tint(slot: f32) -> vec4f {
+    let n = motion_entry(slot);
+    if n == 0u {
+        return vec4f(1.0);
+    }
+    return motion[(n - 1u) * MOTION_STRIDE + 3u];
 }
 
 // See config.rs#DeviceTier

@@ -311,9 +311,10 @@ pub struct TargetConfiguration {
     /// World geometry closer to the camera than this (along its forward axis) fades out, gone at a third
     /// of it. 0 = never.
     pub near_fade_distance: f32,
-    /// Per-object world offsets (`array<vec4f>`, xyz = offset), written on the GPU by the embedder. An instance
-    /// whose last param (`params[23]`, WGSL `params[5].w`) is `n > 0` is moved by entry `n - 1` in every vertex
-    /// stage. `None` binds a zeroed entry.
+    /// Per-object motion (`array<vec4f>`, four per object: offset + turn, centre + scale, axis, tint + opacity),
+    /// written on the GPU by the embedder. An instance whose last param (`params[23]`, WGSL `params[5].w`) is
+    /// `n > 0` is moved by entry `n - 1` in every vertex stage and tinted by it in the fragment stage. `None`
+    /// binds a zeroed entry.
     pub motion: Option<MotionBuffer>,
 }
 
@@ -322,14 +323,14 @@ pub struct TargetConfiguration {
 pub struct MotionBuffer(pub crate::wgpu_resources::GpuBuffer);
 
 impl MotionBuffer {
-    /// A pooled storage buffer holding `entries` objects' motion (three vec4 each: offset + turn,
-    /// centre, axis), zeroed on first allocation.
+    /// A pooled storage buffer holding `entries` objects' motion (four vec4 each: offset + turn,
+    /// centre + scale, axis, tint + opacity), zeroed on first allocation.
     pub fn new(ctx: &RenderContext, entries: u64) -> Self {
         Self(ctx.gpu_resources.buffers.alloc(
             &ctx.device,
             &crate::wgpu_resources::BufferDesc {
                 label: "motolii-motion".into(),
-                size: entries.max(1) * 48,
+                size: entries.max(1) * 64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             },

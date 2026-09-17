@@ -210,10 +210,10 @@ impl GlobalBindings {
                             },
                             count: None,
                         },
-                        // Motion: per-object world offsets computed on the GPU, read by vertex stages.
+                        // Motion: per-object offsets computed on the GPU, read by vertex stages (place) and fragment stages (tint).
                         wgpu::BindGroupLayoutEntry {
                             binding: 11,
-                            visibility: wgpu::ShaderStages::VERTEX,
+                            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                             ty: wgpu::BindingType::Buffer {
                                 ty: wgpu::BufferBindingType::Storage { read_only: true },
                                 has_dynamic_offset: false,
