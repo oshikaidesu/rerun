@@ -39,6 +39,8 @@ struct MaterialUniformBuffer {
     // (start.xy, end.xy in texcoord units).
     gradient_kind: vec4u,
     gradient_line: vec4f,
+    // The gradient's space in texcoord units: origin.xy, scale.zw.
+    gradient_space: vec4f,
 };
 
 const GRADIENT_LINEAR: u32 = 1;
@@ -47,7 +49,8 @@ const GRADIENT_ANGULAR: u32 = 3;
 const GRADIENT_DIAMOND: u32 = 4;
 const TAU: f32 = 6.283185307179586;
 
-fn gradient_parameter(p: vec2f) -> f32 {
+fn gradient_parameter(at: vec2f) -> f32 {
+    let p = (at - material.gradient_space.xy) / material.gradient_space.zw;
     let start = material.gradient_line.xy;
     let d = material.gradient_line.zw - start;
     let len2 = dot(d, d);

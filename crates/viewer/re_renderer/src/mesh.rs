@@ -213,6 +213,10 @@ pub struct CurveFill {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurveGradient {
     pub kind: CurveGradientKind,
+    /// `start`, `end` are in the gradient's own space: `mesh = space_origin + gradient * space_scale`
+    /// (an object-bounding-box gradient stretches with its object).
+    pub space_origin: glam::Vec2,
+    pub space_scale: glam::Vec2,
     pub start: glam::Vec2,
     pub end: glam::Vec2,
     /// Straight sRGB with alpha, evenly spaced over t = 0..=1.
@@ -297,7 +301,8 @@ pub(crate) mod gpu_data {
         even_odd: wgpu_buffer_types::U32RowPadded,
         gradient_kind: wgpu_buffer_types::U32RowPadded,
         gradient_line: wgpu_buffer_types::Vec4,
-        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 7],
+        gradient_space: wgpu_buffer_types::Vec4,
+        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 8],
     }
 
     impl MaterialUniformBuffer {
@@ -311,6 +316,7 @@ pub(crate) mod gpu_data {
                 even_odd: u32::from(curves.is_some_and(|fill| fill.even_odd)).into(),
                 gradient_kind: gradient.map_or(0, |g| g.kind as u32).into(),
                 gradient_line: gradient.map_or(glam::Vec4::ZERO, |g| glam::vec4(g.start.x, g.start.y, g.end.x, g.end.y)).into(),
+                gradient_space: gradient.map_or(glam::vec4(0.0, 0.0, 1.0, 1.0), |g| glam::vec4(g.space_origin.x, g.space_origin.y, g.space_scale.x, g.space_scale.y)).into(),
                 end_padding: Default::default(),
             }
         }
