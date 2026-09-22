@@ -74,6 +74,8 @@ half = { workspace = true, features = ["bytemuck"] }
 itertools.workspace = true
 lyon_algorithms.workspace = true
 lyon_tessellation.workspace = true
+# Stroke outlines as curves (joins, caps, dashes, miter limit) — the same stroker vello uses.
+kurbo = "0.13"
 macaw.workspace = true
 never.workspace = true
 ordered-float.workspace = true

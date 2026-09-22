@@ -9977,6 +9977,7 @@ dependencies = [
  "half",
  "itertools 0.14.0",
  "js-sys",
+ "kurbo 0.13.1",
  "lyon_algorithms",
  "lyon_tessellation",
  "macaw",

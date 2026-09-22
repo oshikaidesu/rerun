@@ -106,6 +106,95 @@ pub struct PathDrawDataBuilder {
     curve_fills: Vec<(crate::mesh::CurveFill, Rgba32Unmul)>,
 }
 
+/// The outline of a stroke as closed contours, within `1e-5` of the path's extent.
+pub fn stroke_outline(contours: &[PathContour], stroke: &PathStroke) -> Vec<PathContour> {
+    use kurbo::{BezPath, PathEl, Point};
+    let at = |p: glam::Vec2| Point::new(f64::from(p.x), f64::from(p.y));
+    let mut path = BezPath::new();
+    let (mut lo, mut hi) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
+    for c in contours {
+        let n = c.vertices.len();
+        if n == 0 {
+            continue;
+        }
+        path.move_to(at(c.vertices[0].point));
+        let edges = if c.closed { n } else { n - 1 };
+        for i in 0..edges {
+            let v0 = &c.vertices[i];
+            let v1 = &c.vertices[(i + 1) % n];
+            lo = lo.min(v0.point).min(v1.point);
+            hi = hi.max(v0.point).max(v1.point);
+            if v0.out_tangent == glam::Vec2::ZERO && v1.in_tangent == glam::Vec2::ZERO {
+                path.line_to(at(v1.point));
+            } else {
+                path.curve_to(at(v0.point + v0.out_tangent), at(v1.point + v1.in_tangent), at(v1.point));
+            }
+        }
+        if c.closed {
+            path.close_path();
+        }
+    }
+    let join = match stroke.join {
+        PathLineJoin::Miter => kurbo::Join::Miter,
+        PathLineJoin::Round => kurbo::Join::Round,
+        PathLineJoin::Bevel => kurbo::Join::Bevel,
+    };
+    let cap = match stroke.cap {
+        PathLineCap::Butt => kurbo::Cap::Butt,
+        PathLineCap::Round => kurbo::Cap::Round,
+        PathLineCap::Square => kurbo::Cap::Square,
+    };
+    let mut style = kurbo::Stroke::new(f64::from(stroke.width))
+        .with_join(join)
+        .with_caps(cap)
+        .with_miter_limit(f64::from(stroke.miter_limit));
+    if let Some((pattern, offset)) = &stroke.dash {
+        style = style.with_dashes(f64::from(*offset), pattern.iter().map(|v| f64::from(*v)));
+    }
+    let extent = f64::from((hi - lo).max_element().max(0.0)) + f64::from(stroke.width);
+    let outline = kurbo::stroke(path, &style, &kurbo::StrokeOpts::default(), (extent * 1e-5).max(1e-6));
+
+    let point = |p: Point| glam::vec2(p.x as f32, p.y as f32);
+    let mut out: Vec<PathContour> = Vec::new();
+    let mut last = glam::Vec2::ZERO;
+    for el in outline.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                last = point(p);
+                out.push(PathContour { closed: true, vertices: vec![PathVertex { point: last, in_tangent: glam::Vec2::ZERO, out_tangent: glam::Vec2::ZERO }] });
+            }
+            PathEl::LineTo(p) => {
+                last = point(p);
+                if let Some(c) = out.last_mut() {
+                    c.vertices.push(PathVertex { point: last, in_tangent: glam::Vec2::ZERO, out_tangent: glam::Vec2::ZERO });
+                }
+            }
+            PathEl::QuadTo(q, p) => {
+                let (q, p) = (point(q), point(p));
+                if let Some(c) = out.last_mut() {
+                    if let Some(prev) = c.vertices.last_mut() {
+                        prev.out_tangent = (q - last) * (2.0 / 3.0);
+                    }
+                    c.vertices.push(PathVertex { point: p, in_tangent: (q - p) * (2.0 / 3.0), out_tangent: glam::Vec2::ZERO });
+                }
+                last = p;
+            }
+            PathEl::CurveTo(c1, c2, p) => {
+                let (c1, c2, p) = (point(c1), point(c2), point(p));
+                if let Some(c) = out.last_mut() {
+                    if let Some(prev) = c.vertices.last_mut() {
+                        prev.out_tangent = c1 - last;
+                    }
+                    c.vertices.push(PathVertex { point: p, in_tangent: c2 - p, out_tangent: glam::Vec2::ZERO });
+                }
+                last = p;
+            }
+            PathEl::ClosePath => {}
+        }
+    }
+    out
+}
+
 /// The contours as quadratic Béziers for per-fragment coverage. Every contour is closed (a fill
 /// closes it); cubics are split into quadratics within `1e-5` of the outline's extent.
 pub fn quadratic_curves(contours: &[PathContour]) -> Vec<[glam::Vec2; 3]> {
@@ -356,6 +445,13 @@ impl PathDrawDataBuilder {
             return;
         }
         self.curve_fills.push((crate::mesh::CurveFill { curves, even_odd: rule == PathFillRule::EvenOdd }, color));
+    }
+
+    /// Stroke the contours with one colour, exact at any magnification: the stroke's outline is
+    /// built as curves (kurbo's stroker: joins, caps, dashes) and filled like [`Self::fill_exact`].
+    pub fn stroke_exact(&mut self, contours: &[PathContour], stroke: &PathStroke, color: Rgba32Unmul) {
+        let outline = stroke_outline(contours, stroke);
+        self.fill_exact(&outline, PathFillRule::NonZero, color);
     }
 
     /// Fill the contours. `color_at` is sampled per tessellated vertex, so a linear gradient
