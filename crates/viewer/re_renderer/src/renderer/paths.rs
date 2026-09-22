@@ -373,14 +373,25 @@ impl PathDrawDataBuilder {
         let mut colors: Vec<Rgba32Unmul> = self.vertices.iter().map(|v| Rgba32Unmul(v.color)).collect();
         let mut texcoords: Vec<glam::Vec2> = self.anchors.iter().map(|a| glam::Vec2::from(*a)).collect();
         let mut triangles: Vec<glam::UVec3> = self.indices.chunks_exact(3).map(|i| glam::uvec3(i[0], i[1], i[2])).collect();
-        let material = |range: std::ops::Range<u32>, curves: Option<std::sync::Arc<crate::mesh::CurveFill>>| crate::mesh::Material {
-            albedo_is_premultiplied: false,
-            field_anchor: false,
-            curves,
-            label: label.into(),
-            index_range: range,
-            albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
-            albedo_factor: crate::Rgba::WHITE,
+        let material = |range: std::ops::Range<u32>, curves: Option<std::sync::Arc<crate::mesh::CurveFill>>| {
+            let ramp = curves.as_ref().and_then(|fill| fill.gradient.as_ref()).and_then(|gradient| {
+                ctx.texture_manager_2d.create(ctx, crate::resource_managers::ImageDataDesc {
+                    label: format!("{label} - gradient ramp").into(),
+                    data: std::borrow::Cow::Owned(gradient.ramp.iter().flat_map(|c| c.0).collect()),
+                    format: crate::resource_managers::SourceImageDataFormat::WgpuCompatible(wgpu::TextureFormat::Rgba8Unorm),
+                    width_height: [gradient.ramp.len() as u32, 1],
+                    alpha_channel_usage: crate::resource_managers::AlphaChannelUsage::AlphaChannelInUse,
+                }).ok()
+            });
+            crate::mesh::Material {
+                albedo_is_premultiplied: false,
+                field_anchor: false,
+                curves,
+                label: label.into(),
+                index_range: range,
+                albedo: ramp.unwrap_or_else(|| ctx.texture_manager_2d.white_texture_unorm_handle().clone()),
+                albedo_factor: crate::Rgba::WHITE,
+            }
         };
         let mut materials = smallvec::SmallVec::new();
         if !self.indices.is_empty() {
@@ -444,7 +455,22 @@ impl PathDrawDataBuilder {
         if curves.is_empty() {
             return;
         }
-        self.curve_fills.push((crate::mesh::CurveFill { curves, even_odd: rule == PathFillRule::EvenOdd }, color));
+        self.curve_fills.push((crate::mesh::CurveFill { curves, even_odd: rule == PathFillRule::EvenOdd, gradient: None }, color));
+    }
+
+    /// [`Self::fill_exact`] with paint that varies along a gradient, evaluated per fragment.
+    pub fn fill_exact_gradient(&mut self, contours: &[PathContour], rule: PathFillRule, gradient: crate::mesh::CurveGradient) {
+        let curves = quadratic_curves(contours);
+        if curves.is_empty() || gradient.ramp.is_empty() {
+            return;
+        }
+        self.curve_fills.push((crate::mesh::CurveFill { curves, even_odd: rule == PathFillRule::EvenOdd, gradient: Some(gradient) }, Rgba32Unmul([255; 4])));
+    }
+
+    /// [`Self::stroke_exact`] with gradient paint.
+    pub fn stroke_exact_gradient(&mut self, contours: &[PathContour], stroke: &PathStroke, gradient: crate::mesh::CurveGradient) {
+        let outline = stroke_outline(contours, stroke);
+        self.fill_exact_gradient(&outline, PathFillRule::NonZero, gradient);
     }
 
     /// Stroke the contours with one colour, exact at any magnification: the stroke's outline is

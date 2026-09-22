@@ -35,7 +35,48 @@ struct MaterialUniformBuffer {
     // FORMAT_CURVES: number of quadratic curves in `curves`, and the fill rule (1 = even-odd).
     curve_count: vec4u,
     even_odd: vec4u,
+    // 0: vertex colour. Otherwise the albedo texture is a ramp over t = 0..=1 along `gradient_line`
+    // (start.xy, end.xy in texcoord units).
+    gradient_kind: vec4u,
+    gradient_line: vec4f,
 };
+
+const GRADIENT_LINEAR: u32 = 1;
+const GRADIENT_RADIAL: u32 = 2;
+const GRADIENT_ANGULAR: u32 = 3;
+const GRADIENT_DIAMOND: u32 = 4;
+const TAU: f32 = 6.283185307179586;
+
+fn gradient_parameter(p: vec2f) -> f32 {
+    let start = material.gradient_line.xy;
+    let d = material.gradient_line.zw - start;
+    let len2 = dot(d, d);
+    if len2 <= 0.0 { return 0.0; }
+    let v = p - start;
+    var t = 0.0;
+    switch material.gradient_kind.x {
+        case GRADIENT_LINEAR: { t = dot(v, d) / len2; }
+        case GRADIENT_RADIAL: { t = sqrt(dot(v, v) / len2); }
+        case GRADIENT_ANGULAR: { let turn = (atan2(v.y, v.x) - atan2(d.y, d.x)) / TAU; t = turn - floor(turn); }
+        case GRADIENT_DIAMOND: {
+            let len = sqrt(len2);
+            t = (abs(dot(v, d) / len) + abs((v.y * d.x - v.x * d.y) / len)) / len;
+        }
+        default: {}
+    }
+    return clamp(t, 0.0, 1.0);
+}
+
+// Straight colour of the ramp at t, interpolated between its texels.
+fn gradient_paint(p: vec2f) -> vec4f {
+    let n = textureDimensions(albedo_texture).x;
+    let x = gradient_parameter(p) * f32(n - 1u);
+    let i = min(u32(floor(x)), n - 1u);
+    let a = textureLoad(albedo_texture, vec2u(i, 0u), 0);
+    let b = textureLoad(albedo_texture, vec2u(min(i + 1u, n - 1u), 0u), 0);
+    let c = mix(a, b, x - floor(x));
+    return vec4f(linear_from_srgb(c.rgb), c.a);
+}
 
 @group(1) @binding(1)
 var<uniform> material: MaterialUniformBuffer;
@@ -233,7 +274,12 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         case FORMAT_RGBA: { texture = linear_from_srgb(sample.rgb); }
         case FORMAT_GRAYSCALE: { texture = linear_from_srgb(sample.rrr); }
         case FORMAT_PREMULTIPLIED_RGBA: { texture = sample.rgb; texture_coverage = sample.a; }
-        case FORMAT_CURVES: { texture_coverage = curve_coverage(in.texcoord, texel); texture = vec3f(texture_coverage); }
+        case FORMAT_CURVES: {
+            var paint = vec4f(1.0);
+            if material.gradient_kind.x != 0u { paint = gradient_paint(in.texcoord); }
+            texture_coverage = curve_coverage(in.texcoord, texel) * paint.a;
+            texture = paint.rgb * texture_coverage;
+        }
         default: { texture = vec3f(0.0); }
     }
 

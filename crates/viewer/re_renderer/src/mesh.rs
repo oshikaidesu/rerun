@@ -204,6 +204,28 @@ pub struct Material {
 pub struct CurveFill {
     pub curves: Vec<[glam::Vec2; 3]>,
     pub even_odd: bool,
+    /// Paint varying over the fill; `None` paints the vertex colour.
+    pub gradient: Option<CurveGradient>,
+}
+
+/// Where along a gradient a point lies (`t` in 0..=1), evaluated per fragment; the colour at `t`
+/// comes from `ramp`, which the embedder samples from its own colour model.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurveGradient {
+    pub kind: CurveGradientKind,
+    pub start: glam::Vec2,
+    pub end: glam::Vec2,
+    /// Straight sRGB with alpha, evenly spaced over t = 0..=1.
+    pub ramp: Vec<crate::Rgba32Unmul>,
+}
+
+/// Keep in sync with `GRADIENT_` in `instanced_mesh_base.wgsl`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurveGradientKind {
+    Linear = 1,
+    Radial = 2,
+    Angular = 3,
+    Diamond = 4,
 }
 
 #[derive(Clone)]
@@ -273,17 +295,22 @@ pub(crate) mod gpu_data {
         field_anchor: wgpu_buffer_types::U32RowPadded,
         curve_count: wgpu_buffer_types::U32RowPadded,
         even_odd: wgpu_buffer_types::U32RowPadded,
-        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 5],
+        gradient_kind: wgpu_buffer_types::U32RowPadded,
+        gradient_line: wgpu_buffer_types::Vec4,
+        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 7],
     }
 
     impl MaterialUniformBuffer {
-        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat, field_anchor: bool, curve_count: u32, even_odd: bool) -> Self {
+        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat, field_anchor: bool, curves: Option<&super::CurveFill>) -> Self {
+            let gradient = curves.and_then(|fill| fill.gradient.as_ref());
             Self {
                 albedo_factor,
                 texture_format: (texture_format as u32).into(),
                 field_anchor: u32::from(field_anchor).into(),
-                curve_count: curve_count.into(),
-                even_odd: u32::from(even_odd).into(),
+                curve_count: curves.map_or(0, |fill| fill.curves.len() as u32).into(),
+                even_odd: u32::from(curves.is_some_and(|fill| fill.even_odd)).into(),
+                gradient_kind: gradient.map_or(0, |g| g.kind as u32).into(),
+                gradient_line: gradient.map_or(glam::Vec4::ZERO, |g| glam::vec4(g.start.x, g.start.y, g.end.x, g.end.y)).into(),
                 end_padding: Default::default(),
             }
         }
@@ -387,8 +414,7 @@ impl GpuMesh {
                             gpu_data::TextureFormat::Rgba
                         },
                         material.field_anchor,
-                        material.curves.as_ref().map_or(0, |fill| fill.curves.len() as u32),
-                        material.curves.as_ref().is_some_and(|fill| fill.even_odd),
+                        material.curves.as_deref(),
                     )
                 }),
             );
