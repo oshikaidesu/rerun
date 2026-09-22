@@ -560,6 +560,8 @@ impl MeshDrawData {
 pub struct MeshRenderer {
     default_program: Arc<MeshProgram>,
     pub bind_group_layout: GpuBindGroupLayoutHandle,
+    /// Bound for every material without curves.
+    pub empty_curves: crate::wgpu_resources::GpuBuffer,
     /// Group 2: the draw data's world-space cut.
     pub clip_bind_group_layout: GpuBindGroupLayoutHandle,
     pub(crate) pipeline_layout: GpuPipelineLayoutHandle,
@@ -599,7 +601,27 @@ impl Renderer for MeshRenderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        // Quadratic outlines of a `CurveFill`, two vec4 per curve.
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
+            },
+        );
+        let empty_curves = ctx.gpu_resources.buffers.alloc(
+            &ctx.device,
+            &crate::wgpu_resources::BufferDesc {
+                label: "MeshRenderer::empty_curves".into(),
+                size: std::mem::size_of::<[f32; 4]>() as u64 * 2,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
             },
         );
         let clip_bind_group_layout = ctx.gpu_resources.bind_group_layouts.get_or_create(
@@ -647,6 +669,7 @@ impl Renderer for MeshRenderer {
         Self {
             default_program: Arc::new(default_program),
             bind_group_layout,
+            empty_curves,
             clip_bind_group_layout,
             pipeline_layout,
         }
@@ -875,6 +898,7 @@ mod tests {
             smallvec![Material {
                 albedo_is_premultiplied: false,
                 field_anchor: false,
+                curves: None,
                 label: "opaque_material".into(),
                 index_range: 0..3,
                 albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
@@ -890,6 +914,7 @@ mod tests {
                 Material {
                     albedo_is_premultiplied: false,
                     field_anchor: false,
+                    curves: None,
                     label: "opaque_material".into(),
                     index_range: 0..3,
                     albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
@@ -898,6 +923,7 @@ mod tests {
                 Material {
                     albedo_is_premultiplied: false,
                     field_anchor: false,
+                    curves: None,
                     label: "opaque_material".into(),
                     index_range: 0..3,
                     albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),

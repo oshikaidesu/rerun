@@ -194,6 +194,16 @@ pub struct Material {
     /// its position: a stroked path stores the centreline point there, so both sides of a line move
     /// together and the line keeps its width under the field.
     pub field_anchor: bool,
+    /// Coverage comes from these curves, evaluated per fragment, instead of the triangles' edges:
+    /// the triangles only need to cover the curves' bounds. Exact at any magnification.
+    pub curves: Option<std::sync::Arc<CurveFill>>,
+}
+
+/// Quadratic Bézier outlines (p0, p1, p2 in mesh units) whose winding decides coverage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurveFill {
+    pub curves: Vec<[glam::Vec2; 3]>,
+    pub even_odd: bool,
 }
 
 #[derive(Clone)]
@@ -251,6 +261,7 @@ pub(crate) mod gpu_data {
         Rgba = 0,
         Grayscale = 1,
         PremultipliedRgba = 2,
+        Curves = 3,
     }
 
     /// Keep in sync with [`MaterialUniformBuffer`] in `instanced_mesh.wgsl`
@@ -260,15 +271,19 @@ pub(crate) mod gpu_data {
         albedo_factor: ecolor::Rgba,
         texture_format: wgpu_buffer_types::U32RowPadded,
         field_anchor: wgpu_buffer_types::U32RowPadded,
-        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 3],
+        curve_count: wgpu_buffer_types::U32RowPadded,
+        even_odd: wgpu_buffer_types::U32RowPadded,
+        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 5],
     }
 
     impl MaterialUniformBuffer {
-        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat, field_anchor: bool) -> Self {
+        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat, field_anchor: bool, curve_count: u32, even_odd: bool) -> Self {
             Self {
                 albedo_factor,
                 texture_format: (texture_format as u32).into(),
                 field_anchor: u32::from(field_anchor).into(),
+                curve_count: curve_count.into(),
+                even_odd: u32::from(even_odd).into(),
                 end_padding: Default::default(),
             }
         }
@@ -362,7 +377,9 @@ impl GpuMesh {
                 data.materials.iter().map(|material| {
                     gpu_data::MaterialUniformBuffer::new(
                         material.albedo_factor,
-                        if material.albedo_is_premultiplied {
+                        if material.curves.is_some() {
+                            gpu_data::TextureFormat::Curves
+                        } else if material.albedo_is_premultiplied {
                             gpu_data::TextureFormat::PremultipliedRgba
                         } else if material.albedo.texture.format().components() == 1 {
                             gpu_data::TextureFormat::Grayscale
@@ -370,6 +387,8 @@ impl GpuMesh {
                             gpu_data::TextureFormat::Rgba
                         },
                         material.field_anchor,
+                        material.curves.as_ref().map_or(0, |fill| fill.curves.len() as u32),
+                        material.curves.as_ref().is_some_and(|fill| fill.even_odd),
                     )
                 }),
             );
@@ -382,6 +401,23 @@ impl GpuMesh {
             for (material, uniform_buffer_binding) in
                 std::iter::zip(&data.materials, uniform_buffer_bindings)
             {
+                let curves = match &material.curves {
+                    Some(fill) if !fill.curves.is_empty() => {
+                        let data: Vec<[f32; 4]> = fill.curves.iter().flat_map(|[a, b, c]| [[a.x, a.y, b.x, b.y], [c.x, c.y, 0.0, 0.0]]).collect();
+                        let buffer = pools.buffers.alloc(
+                            device,
+                            &BufferDesc {
+                                label: format!("{} - curves", material.label).into(),
+                                size: (data.len() * std::mem::size_of::<[f32; 4]>()) as u64,
+                                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                                mapped_at_creation: false,
+                            },
+                        );
+                        ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&data));
+                        buffer
+                    }
+                    _ => ctx.renderer::<MeshRenderer>().empty_curves.clone(),
+                };
                 let bind_group = pools.bind_groups.alloc(
                     device,
                     pools,
@@ -389,14 +425,16 @@ impl GpuMesh {
                         label: material.label.clone(),
                         entries: smallvec![
                             BindGroupEntry::DefaultTextureView(material.albedo.handle()),
-                            uniform_buffer_binding
+                            uniform_buffer_binding,
+                            BindGroupEntry::Buffer { handle: curves.handle, offset: 0, size: None },
                         ],
                         layout: mesh_bind_group_layout,
                     },
                 );
 
                 // TODO(#12223): handle texture transparency
-                let is_transparent = material.albedo_is_premultiplied
+                let is_transparent = material.curves.is_some()
+                    || material.albedo_is_premultiplied
                     || material.albedo_factor.a() < 1.0
                     || data.vertex_colors.iter().any(|color| color.0[3] < 255);
 

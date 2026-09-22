@@ -102,6 +102,54 @@ pub struct PathDrawDataBuilder {
     anchors: Vec<[f32; 2]>,
     indices: Vec<u32>,
     tolerance: Option<f32>,
+    /// Fills whose coverage the GPU evaluates from their curves (see [`Self::fill_exact`]).
+    curve_fills: Vec<(crate::mesh::CurveFill, Rgba32Unmul)>,
+}
+
+/// The contours as quadratic Béziers for per-fragment coverage. Every contour is closed (a fill
+/// closes it); cubics are split into quadratics within `1e-5` of the outline's extent.
+pub fn quadratic_curves(contours: &[PathContour]) -> Vec<[glam::Vec2; 3]> {
+    use lyon_tessellation::geom::{CubicBezierSegment, point as geom_point};
+    let (mut lo, mut hi) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
+    for c in contours {
+        for v in &c.vertices {
+            for p in [v.point, v.point + v.in_tangent, v.point + v.out_tangent] {
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+        }
+    }
+    let tolerance = ((hi - lo).max_element() * 1e-5).max(1e-6);
+    let mut out = Vec::new();
+    for c in contours {
+        let n = c.vertices.len();
+        if n < 2 {
+            continue;
+        }
+        for i in 0..n {
+            let v0 = &c.vertices[i];
+            let v1 = &c.vertices[(i + 1) % n];
+            if !c.closed && i + 1 == n {
+                out.push([v0.point, (v0.point + v1.point) * 0.5, v1.point]);
+                continue;
+            }
+            if v0.out_tangent == glam::Vec2::ZERO && v1.in_tangent == glam::Vec2::ZERO {
+                out.push([v0.point, (v0.point + v1.point) * 0.5, v1.point]);
+                continue;
+            }
+            let at = |p: glam::Vec2| geom_point(p.x, p.y);
+            let cubic = CubicBezierSegment {
+                from: at(v0.point),
+                ctrl1: at(v0.point + v0.out_tangent),
+                ctrl2: at(v1.point + v1.in_tangent),
+                to: at(v1.point),
+            };
+            cubic.for_each_quadratic_bezier(tolerance, &mut |q| {
+                out.push([glam::vec2(q.from.x, q.from.y), glam::vec2(q.ctrl.x, q.ctrl.y), glam::vec2(q.to.x, q.to.y)]);
+            });
+        }
+    }
+    out
 }
 
 fn lyon_path(contours: &[PathContour]) -> Path {
@@ -232,33 +280,54 @@ impl PathDrawDataBuilder {
     /// Retain the filled and stroked geometry for a final world-space view.
     /// Vertex paint stays on the geometry; the material is a constant white texel.
     pub fn into_mesh(self, ctx: &RenderContext, label: &str) -> crate::mesh::CpuMesh {
-        let positions: Vec<_> = self
-            .vertices
-            .iter()
-            .map(|v| glam::Vec2::from(v.position).extend(0.0))
-            .collect();
+        let mut positions: Vec<glam::Vec3> = self.vertices.iter().map(|v| glam::Vec2::from(v.position).extend(0.0)).collect();
+        let mut colors: Vec<Rgba32Unmul> = self.vertices.iter().map(|v| Rgba32Unmul(v.color)).collect();
+        let mut texcoords: Vec<glam::Vec2> = self.anchors.iter().map(|a| glam::Vec2::from(*a)).collect();
+        let mut triangles: Vec<glam::UVec3> = self.indices.chunks_exact(3).map(|i| glam::uvec3(i[0], i[1], i[2])).collect();
+        let material = |range: std::ops::Range<u32>, curves: Option<std::sync::Arc<crate::mesh::CurveFill>>| crate::mesh::Material {
+            albedo_is_premultiplied: false,
+            field_anchor: false,
+            curves,
+            label: label.into(),
+            index_range: range,
+            albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
+            albedo_factor: crate::Rgba::WHITE,
+        };
+        let mut materials = smallvec::SmallVec::new();
+        if !self.indices.is_empty() {
+            materials.push(material(0..self.indices.len() as u32, None));
+        }
+        // One quad over each exact fill's curves; the texcoord is the path position the fragment
+        // tests against the curves. The margin leaves room for the antialiased edge.
+        for (fill, color) in self.curve_fills {
+            let (lo, hi) = fill.curves.iter().flatten().fold((glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+            let margin = glam::Vec2::splat((hi - lo).max_element() * 0.01 + 1.0);
+            let (lo, hi) = (lo - margin, hi + margin);
+            let base = positions.len() as u32;
+            for corner in [lo, glam::vec2(hi.x, lo.y), hi, glam::vec2(lo.x, hi.y)] {
+                positions.push(corner.extend(0.0));
+                colors.push(color);
+                texcoords.push(corner);
+            }
+            let first = triangles.len() as u32 * 3;
+            triangles.push(glam::uvec3(base, base + 1, base + 2));
+            triangles.push(glam::uvec3(base, base + 2, base + 3));
+            materials.push(material(first..first + 6, Some(std::sync::Arc::new(fill))));
+        }
+        if materials.is_empty() {
+            materials.push(material(0..0, None));
+        }
         let count = positions.len();
         let bbox = macaw::BoundingBox::from_points(positions.iter().copied());
         crate::mesh::CpuMesh {
             label: label.into(),
-            triangle_indices: self
-                .indices
-                .chunks_exact(3)
-                .map(|i| glam::uvec3(i[0], i[1], i[2]))
-                .collect(),
+            triangle_indices: triangles,
             vertex_positions: positions,
-            vertex_colors: self.vertices.iter().map(|v| Rgba32Unmul(v.color)).collect(),
+            vertex_colors: colors,
             vertex_normals: vec![glam::Vec3::Z; count],
-            // The anchors ride in the texcoords (the albedo is a constant texel, so texcoords are free).
-            vertex_texcoords: self.anchors.iter().map(|a| glam::Vec2::from(*a)).collect(),
-            materials: smallvec![crate::mesh::Material {
-                albedo_is_premultiplied: false,
-                field_anchor: false,
-                label: label.into(),
-                index_range: 0..self.indices.len() as u32,
-                albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
-                albedo_factor: crate::Rgba::WHITE,
-            }],
+            // Tessellated vertices keep their field anchor here; exact fills keep their path position.
+            vertex_texcoords: texcoords,
+            materials,
             bbox,
         }
     }
@@ -277,6 +346,16 @@ impl PathDrawDataBuilder {
         self.anchors.extend(buffers.vertices.iter().map(|(_, a)| *a));
         self.indices
             .extend(buffers.indices.iter().map(|i| base + i));
+    }
+
+    /// Fill the contours with one colour, exact at any magnification: the GPU evaluates coverage
+    /// from the curves per fragment, so nothing is tessellated and no tolerance applies.
+    pub fn fill_exact(&mut self, contours: &[PathContour], rule: PathFillRule, color: Rgba32Unmul) {
+        let curves = quadratic_curves(contours);
+        if curves.is_empty() {
+            return;
+        }
+        self.curve_fills.push((crate::mesh::CurveFill { curves, even_odd: rule == PathFillRule::EvenOdd }, color));
     }
 
     /// Fill the contours. `color_at` is sampled per tessellated vertex, so a linear gradient
@@ -333,7 +412,7 @@ impl PathDrawDataBuilder {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.indices.is_empty()
+        self.indices.is_empty() && self.curve_fills.is_empty()
     }
 
     pub fn triangle_count(&self) -> usize {

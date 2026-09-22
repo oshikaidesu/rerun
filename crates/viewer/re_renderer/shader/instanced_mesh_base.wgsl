@@ -23,6 +23,7 @@ var albedo_texture: texture_2d<f32>;
 const FORMAT_RGBA: u32 = 0;
 const FORMAT_GRAYSCALE: u32 = 1;
 const FORMAT_PREMULTIPLIED_RGBA: u32 = 2;
+const FORMAT_CURVES: u32 = 3;
 
 // Keep in sync with `gpu_data::MaterialUniformBuffer` in mesh.rs
 struct MaterialUniformBuffer {
@@ -31,10 +32,75 @@ struct MaterialUniformBuffer {
     texture_format: vec4u,
     // 1: evaluate the vertex field at texcoord (x, y, 0) — stroked paths keep their centreline there.
     field_anchor: vec4u,
+    // FORMAT_CURVES: number of quadratic curves in `curves`, and the fill rule (1 = even-odd).
+    curve_count: vec4u,
+    even_odd: vec4u,
 };
 
 @group(1) @binding(1)
 var<uniform> material: MaterialUniformBuffer;
+
+// Quadratic outlines in texcoord units, two vec4 per curve: (p0, p1), (p2, _).
+@group(1) @binding(2)
+var<storage, read> curves: array<vec4f>;
+
+// Signed, antialiased crossing of one quadratic with the ray from the origin towards +x.
+// Lengyel, "GPU-Centered Font Rendering Directly from Glyph Outlines" (JCGT 2017): the sign
+// pattern of the control points' y decides which roots count, so shared endpoints never double count.
+fn curve_ray_coverage(p1: vec2f, p2: vec2f, p3: vec2f, pixels_per_unit: f32) -> f32 {
+    let shift = select(0u, 2u, p1.y > 0.0) + select(0u, 4u, p2.y > 0.0) + select(0u, 8u, p3.y > 0.0);
+    let code = (0x2E74u >> shift) & 3u;
+    if code == 0u {
+        return 0.0;
+    }
+    let a = p1 - 2.0 * p2 + p3;
+    let b = p1 - p2;
+    var t1: f32;
+    var t2: f32;
+    if abs(a.y) < 1e-6 {
+        t1 = p1.y / (2.0 * b.y);
+        t2 = t1;
+    } else {
+        let d = sqrt(max(b.y * b.y - a.y * p1.y, 0.0));
+        t1 = (b.y - d) / a.y;
+        t2 = (b.y + d) / a.y;
+    }
+    let x1 = (a.x * t1 - 2.0 * b.x) * t1 + p1.x;
+    let x2 = (a.x * t2 - 2.0 * b.x) * t2 + p1.x;
+    var coverage = 0.0;
+    if (code & 1u) != 0u {
+        coverage += clamp(x1 * pixels_per_unit + 0.5, 0.0, 1.0);
+    }
+    if code > 1u {
+        coverage -= clamp(x2 * pixels_per_unit + 0.5, 0.0, 1.0);
+    }
+    return coverage;
+}
+
+fn winding_coverage(winding: f32) -> f32 {
+    if material.even_odd.x != 0u {
+        return clamp(abs(winding - 2.0 * round(winding * 0.5)), 0.0, 1.0);
+    }
+    return clamp(abs(winding), 0.0, 1.0);
+}
+
+// Coverage of the curve fill at `p`, antialiased over one pixel (`texel` = fwidth of the texcoord).
+// Rays along x and y are averaged, so edges in both directions are smooth.
+fn curve_coverage(p: vec2f, texel: vec2f) -> f32 {
+    let pixels_per_unit = 1.0 / max(texel, vec2f(1e-12));
+    var along_x = 0.0;
+    var along_y = 0.0;
+    for (var i = 0u; i < material.curve_count.x; i++) {
+        let a = curves[2u * i];
+        let b = curves[2u * i + 1u];
+        let p1 = a.xy - p;
+        let p2 = a.zw - p;
+        let p3 = b.xy - p;
+        along_x += curve_ray_coverage(p1, p2, p3, pixels_per_unit.x);
+        along_y += curve_ray_coverage(p1.yx, p2.yx, p3.yx, pixels_per_unit.y);
+    }
+    return 0.5 * (winding_coverage(along_x) + winding_coverage(along_y));
+}
 
 // Keep in sync with `clip_gpu_data::ClipUniformBuffer` in mesh_renderer.rs
 struct ClipUniformBuffer {
@@ -150,6 +216,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
 
 @fragment
 fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
+    let texel = fwidth(in.texcoord);
     if FILTER_SURFACE_FOOTPRINT {
         var n = in.footprint_normal / max(length(in.footprint_normal), 1e-20);
         let back = dot(n,view_direction_to_camera(in.footprint_position)) < 0.0;
@@ -166,6 +233,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         case FORMAT_RGBA: { texture = linear_from_srgb(sample.rgb); }
         case FORMAT_GRAYSCALE: { texture = linear_from_srgb(sample.rrr); }
         case FORMAT_PREMULTIPLIED_RGBA: { texture = sample.rgb; texture_coverage = sample.a; }
+        case FORMAT_CURVES: { texture_coverage = curve_coverage(in.texcoord, texel); texture = vec3f(texture_coverage); }
         default: { texture = vec3f(0.0); }
     }
 
@@ -207,7 +275,9 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
 
 @fragment
 fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
+    let texel = fwidth(in.texcoord);
     if in.color.a <= 0.0 { discard; }
+    if material.texture_format.x == FORMAT_CURVES && curve_coverage(in.texcoord, texel) < 0.5 { discard; }
     if material.texture_format.x == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
     if clip_outside(clip.plane, in.world_position.xyz) {
         discard;
@@ -217,7 +287,9 @@ fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
 
 @fragment
 fn fs_main_outline_mask(in: VertexOut) -> @location(0) vec2u {
+    let texel = fwidth(in.texcoord);
     if in.color.a <= 0.0 || clip_outside(clip.plane, in.world_position.xyz) { discard; }
+    if material.texture_format.x == FORMAT_CURVES && curve_coverage(in.texcoord, texel) < 0.5 { discard; }
     if material.texture_format.x == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
     return in.outline_mask_ids;
 }
