@@ -373,15 +373,22 @@ impl PathDrawDataBuilder {
         let mut colors: Vec<Rgba32Unmul> = self.vertices.iter().map(|v| Rgba32Unmul(v.color)).collect();
         let mut texcoords: Vec<glam::Vec2> = self.anchors.iter().map(|a| glam::Vec2::from(*a)).collect();
         let mut triangles: Vec<glam::UVec3> = self.indices.chunks_exact(3).map(|i| glam::uvec3(i[0], i[1], i[2])).collect();
+        let ramps: std::cell::RefCell<Vec<(*const crate::mesh::CurveGradient, crate::resource_managers::GpuTexture2D)>> = Default::default();
         let material = |range: std::ops::Range<u32>, curves: Option<std::sync::Arc<crate::mesh::CurveFill>>| {
             let ramp = curves.as_ref().and_then(|fill| fill.gradient.as_ref()).and_then(|gradient| {
-                ctx.texture_manager_2d.create(ctx, crate::resource_managers::ImageDataDesc {
+                let key = std::sync::Arc::as_ptr(gradient);
+                if let Some((_, texture)) = ramps.borrow().iter().find(|(k, _)| *k == key) {
+                    return Some(texture.clone());
+                }
+                let texture = ctx.texture_manager_2d.create(ctx, crate::resource_managers::ImageDataDesc {
                     label: format!("{label} - gradient ramp").into(),
                     data: std::borrow::Cow::Owned(gradient.ramp.iter().flat_map(|c| c.0).collect()),
                     format: crate::resource_managers::SourceImageDataFormat::WgpuCompatible(wgpu::TextureFormat::Rgba8Unorm),
                     width_height: [gradient.ramp.len() as u32, 1],
                     alpha_channel_usage: crate::resource_managers::AlphaChannelUsage::AlphaChannelInUse,
-                }).ok()
+                }).ok()?;
+                ramps.borrow_mut().push((key, texture.clone()));
+                Some(texture)
             });
             crate::mesh::Material {
                 albedo_is_premultiplied: false,
@@ -451,20 +458,50 @@ impl PathDrawDataBuilder {
     /// Fill the contours with one colour, exact at any magnification: the GPU evaluates coverage
     /// from the curves per fragment, so nothing is tessellated and no tolerance applies.
     pub fn fill_exact(&mut self, contours: &[PathContour], rule: PathFillRule, color: Rgba32Unmul) {
-        let curves = quadratic_curves(contours);
-        if curves.is_empty() {
-            return;
-        }
-        self.curve_fills.push((crate::mesh::CurveFill { curves, even_odd: rule == PathFillRule::EvenOdd, gradient: None }, color));
+        self.push_exact(contours, rule, None, color);
     }
 
     /// [`Self::fill_exact`] with paint that varies along a gradient, evaluated per fragment.
     pub fn fill_exact_gradient(&mut self, contours: &[PathContour], rule: PathFillRule, gradient: crate::mesh::CurveGradient) {
-        let curves = quadratic_curves(contours);
-        if curves.is_empty() || gradient.ramp.is_empty() {
+        if gradient.ramp.is_empty() {
             return;
         }
-        self.curve_fills.push((crate::mesh::CurveFill { curves, even_odd: rule == PathFillRule::EvenOdd, gradient: Some(gradient) }, Rgba32Unmul([255; 4])));
+        self.push_exact(contours, rule, Some(std::sync::Arc::new(gradient)), Rgba32Unmul([255; 4]));
+    }
+
+    /// Each fragment tests every curve of its piece, so a fill is split into pieces whose bounds do
+    /// not overlap (a line of text becomes one piece per glyph). Contours whose bounds overlap stay
+    /// together, so holes and self-overlaps keep their winding.
+    fn push_exact(&mut self, contours: &[PathContour], rule: PathFillRule, gradient: Option<std::sync::Arc<crate::mesh::CurveGradient>>, color: Rgba32Unmul) {
+        let pieces: Vec<(Vec<[glam::Vec2; 3]>, glam::Vec2, glam::Vec2)> = contours.iter()
+            .map(|contour| quadratic_curves(std::slice::from_ref(contour)))
+            .filter(|curves| !curves.is_empty())
+            .map(|curves| {
+                let (lo, hi) = curves.iter().flatten().fold((glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+                (curves, lo, hi)
+            })
+            .collect();
+        let mut group: Vec<usize> = (0..pieces.len()).collect();
+        fn root(group: &mut [usize], mut i: usize) -> usize {
+            while group[i] != i { group[i] = group[group[i]]; i = group[i]; }
+            i
+        }
+        for i in 0..pieces.len() {
+            for j in i + 1..pieces.len() {
+                let (a, b) = (&pieces[i], &pieces[j]);
+                if a.1.x <= b.2.x && b.1.x <= a.2.x && a.1.y <= b.2.y && b.1.y <= a.2.y {
+                    let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                    group[ri] = rj;
+                }
+            }
+        }
+        let mut merged: std::collections::BTreeMap<usize, Vec<[glam::Vec2; 3]>> = std::collections::BTreeMap::new();
+        for (i, (curves, _, _)) in pieces.into_iter().enumerate() {
+            merged.entry(root(&mut group, i)).or_default().extend(curves);
+        }
+        for curves in merged.into_values() {
+            self.curve_fills.push((crate::mesh::CurveFill { curves, even_odd: rule == PathFillRule::EvenOdd, gradient: gradient.clone() }, color));
+        }
     }
 
     /// [`Self::stroke_exact`] with gradient paint.
@@ -776,5 +813,36 @@ mod tests {
             Rgba32Unmul([p.x as u8, 0, 0, 255])
         });
         assert_eq!(seen.get(), 4);
+    }
+}
+
+#[cfg(test)]
+mod exact_fill_tests {
+    use super::*;
+
+    fn square(at: glam::Vec2, size: f32) -> PathContour {
+        let v = |x: f32, y: f32| PathVertex { point: at + glam::vec2(x, y), in_tangent: glam::Vec2::ZERO, out_tangent: glam::Vec2::ZERO };
+        PathContour { closed: true, vertices: vec![v(0.0, 0.0), v(size, 0.0), v(size, size), v(0.0, size)] }
+    }
+
+    #[test]
+    fn separate_shapes_become_separate_pieces_and_holes_stay_with_their_outline() {
+        let mut builder = PathDrawDataBuilder::default();
+        builder.fill_exact(&[square(glam::Vec2::ZERO, 10.0), square(glam::vec2(20.0, 0.0), 10.0)], PathFillRule::NonZero, Rgba32Unmul([0, 0, 0, 255]));
+        assert_eq!(builder.curve_fills.len(), 2);
+
+        let mut builder = PathDrawDataBuilder::default();
+        builder.fill_exact(&[square(glam::Vec2::ZERO, 10.0), square(glam::vec2(3.0, 3.0), 4.0)], PathFillRule::EvenOdd, Rgba32Unmul([0, 0, 0, 255]));
+        assert_eq!(builder.curve_fills.len(), 1);
+        assert_eq!(builder.curve_fills[0].0.curves.len(), 8);
+    }
+
+    #[test]
+    fn a_closed_outline_becomes_a_closed_chain_of_quadratics() {
+        let curves = quadratic_curves(&[square(glam::Vec2::ZERO, 10.0)]);
+        assert_eq!(curves.len(), 4);
+        for (a, b) in curves.iter().zip(curves.iter().cycle().skip(1)) {
+            assert_eq!(a[2], b[0], "each curve starts where the previous one ends");
+        }
     }
 }

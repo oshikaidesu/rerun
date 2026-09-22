@@ -204,8 +204,8 @@ pub struct Material {
 pub struct CurveFill {
     pub curves: Vec<[glam::Vec2; 3]>,
     pub even_odd: bool,
-    /// Paint varying over the fill; `None` paints the vertex colour.
-    pub gradient: Option<CurveGradient>,
+    /// Paint varying over the fill; `None` paints the vertex colour. Shared by the pieces of one fill.
+    pub gradient: Option<std::sync::Arc<CurveGradient>>,
 }
 
 /// Where along a gradient a point lies (`t` in 0..=1), evaluated per fragment; the colour at `t`
