@@ -17,10 +17,7 @@ mod pinhole_wrapper;
 mod proc_mesh;
 mod scene_bounding_boxes;
 mod shared_fallbacks;
-mod spatial_stage;
 mod spatial_topology;
-/// Motolii seam: 埋め込み側が置くカメラ(上流に無い追加 module)。
-mod stage_camera;
 mod ui;
 mod ui_2d;
 mod ui_3d;
@@ -34,11 +31,8 @@ use re_sdk_types::blueprint::archetypes::Background;
 use re_sdk_types::blueprint::components::BackgroundKind;
 use re_sdk_types::components::Color;
 // ---
-pub use eye::Eye;
 use re_viewer_context::ViewContext;
 use re_viewport_blueprint::{ViewProperty, ViewPropertyQueryError};
-pub use spatial_stage::SpatialStage;
-pub use stage_camera::StageCamera;
 pub use ui::SpatialViewState;
 pub use view_2d::SpatialView2D;
 pub use view_3d::SpatialView3D;

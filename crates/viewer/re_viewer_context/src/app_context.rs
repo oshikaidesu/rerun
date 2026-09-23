@@ -15,10 +15,8 @@ use crate::{
     ActiveStoreContext, AppCaches, AppOptions, ApplicationSelectionState, CommandSender,
     ComponentUiRegistry, DragAndDropManager, FallbackProviderRegistry, FocusTarget, Item,
     ItemCollection, Route, StorageContext, StoreHub, SystemCommand, SystemCommandSender as _,
-    TimeControl, ViewClassRegistry,
+    TableStores, TimeControl, ViewClassRegistry,
 };
-#[cfg(feature = "tables")]
-use crate::TableStores;
 
 /// Application context that is shared across all parts of the viewer.
 ///
@@ -191,7 +189,6 @@ impl AppContext<'_> {
     }
 
     /// All loaded tables.
-    #[cfg(feature = "tables")]
     pub fn table_stores(&self) -> &TableStores {
         self.storage_context.tables
     }

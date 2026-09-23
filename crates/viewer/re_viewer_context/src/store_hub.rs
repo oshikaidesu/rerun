@@ -19,10 +19,8 @@ use re_sdk_types::components::Timestamp;
 
 use crate::{
     ActiveStoreContext, BlueprintUndoState, RecordingOrTable, Route, StorageContext, StoreCache,
-    TimeControl, ViewClassRegistry,
+    TableStore, TableStores, TimeControl, ViewClassRegistry,
 };
-#[cfg(feature = "tables")]
-use crate::{TableStore, TableStores};
 
 // ---
 
@@ -129,7 +127,6 @@ pub struct StoreHub {
 
     data_source_order: DataSourceOrder,
     store_bundle: StoreBundle,
-    #[cfg(feature = "tables")]
     table_stores: HashMap<TableId, TableStore>,
 
     /// These applications should enable the heuristics early next frame.
@@ -281,7 +278,6 @@ impl StoreHub {
 
             store_usages: Default::default(),
 
-            #[cfg(feature = "tables")]
             table_stores: TableStores::default(),
             table_blueprints: Default::default(),
         }
@@ -444,7 +440,6 @@ impl StoreHub {
             StorageContext {
                 hub: self,
                 bundle: &self.store_bundle,
-                #[cfg(feature = "tables")]
                 tables: &self.table_stores,
             },
             store_context,
@@ -511,9 +506,9 @@ impl StoreHub {
 
     /// Add a chunk to a store and forward events to the store's [`StoreCache`] (if one exists).
     ///
-    /// This is the correct write route when a caller owns ingestion rather than using the
-    /// Viewer application's message channel.
-    pub fn add_chunk(
+    /// This is the correct way to add data when a [`StoreCache`] may already exist,
+    /// e.g. in test harnesses that bypass the normal message channel.
+    pub fn add_chunk_for_tests(
         &mut self,
         store_id: &StoreId,
         chunk: &std::sync::Arc<re_chunk::Chunk>,
@@ -536,18 +531,7 @@ impl StoreHub {
         Ok(events)
     }
 
-    /// Compatibility alias for callers that predate [`Self::add_chunk`].
-    #[deprecated = "use StoreHub::add_chunk"]
-    pub fn add_chunk_for_tests(
-        &mut self,
-        store_id: &StoreId,
-        chunk: &std::sync::Arc<re_chunk::Chunk>,
-    ) -> anyhow::Result<Vec<re_chunk_store::ChunkStoreEvent>> {
-        self.add_chunk(store_id, chunk)
-    }
-
     /// Inserts a new table into the store (potentially overwriting an existing entry).
-    #[cfg(feature = "tables")]
     pub fn insert_table_store(&mut self, id: TableId, store: TableStore) -> Option<TableStore> {
         self.table_stores.insert(id, store)
     }
@@ -636,7 +620,6 @@ impl StoreHub {
                 self.remove_store(store_id);
             }
             RecordingOrTable::Table { table_id } => {
-                #[cfg(feature = "tables")]
                 self.table_stores.remove(table_id);
                 if let Some(blueprint_store_id) = self.table_blueprints.remove(table_id) {
                     self.store_bundle.remove(&blueprint_store_id);
@@ -695,7 +678,6 @@ impl StoreHub {
         self.store_caches
             .retain(|store_id, _| store_ids_retained.contains(store_id));
 
-        #[cfg(feature = "tables")]
         self.table_stores.clear();
         self.table_blueprints.clear();
     }
@@ -1410,6 +1392,7 @@ impl StoreHub {
             default_blueprint_by_app_id: _,
             active_blueprint_by_app_id: _,
             store_bundle,
+            table_stores,
             table_blueprints: _,
             data_source_order: _,
             should_enable_heuristics_by_app_id: _,
@@ -1418,7 +1401,6 @@ impl StoreHub {
             blueprint_last_save: _,
             blueprint_last_gc: _,
             store_usages: _,
-            ..
         } = self;
 
         let mut store_stats = BTreeMap::new();
@@ -1443,17 +1425,12 @@ impl StoreHub {
             );
         }
 
-        #[cfg(feature = "tables")]
-        let table_stats = {
-            let mut table_stats = BTreeMap::new();
-            #[expect(clippy::iter_over_hash_type)]
-            for (table_id, table_store) in &self.table_stores {
-                table_stats.insert(table_id.clone(), table_store.total_size_bytes());
-            }
-            table_stats
-        };
-        #[cfg(not(feature = "tables"))]
-        let table_stats = BTreeMap::new();
+        let mut table_stats = BTreeMap::new();
+
+        #[expect(clippy::iter_over_hash_type)]
+        for (table_id, table_store) in table_stores {
+            table_stats.insert(table_id.clone(), table_store.total_size_bytes());
+        }
 
         StoreHubStats {
             store_stats,
@@ -1469,6 +1446,7 @@ impl MemUsageTreeCapture for StoreHub {
 
         let Self {
             store_bundle,
+            table_stores,
             store_caches,
 
             // Small stuff:
@@ -1482,7 +1460,6 @@ impl MemUsageTreeCapture for StoreHub {
             blueprint_last_save: _,
             blueprint_last_gc: _,
             store_usages: _,
-            ..
         } = self;
 
         let mut node = MemUsageNode::new();
@@ -1516,15 +1493,13 @@ impl MemUsageTreeCapture for StoreHub {
         }
         node.add("stores", stores_node.into_tree());
 
-        #[cfg(feature = "tables")]
-        {
-            let mut table_stores_node = MemUsageNode::new();
-            for (table_id, table_store) in &self.table_stores {
-                let name = format!("{table_id:?}");
-                table_stores_node.add(name, MemUsageTree::Bytes(table_store.total_size_bytes()));
-            }
-            node.add("TableStores", table_stores_node.into_tree());
+        // table_stores
+        let mut table_stores_node = MemUsageNode::new();
+        for (table_id, table_store) in table_stores {
+            let name = format!("{table_id:?}");
+            table_stores_node.add(name, MemUsageTree::Bytes(table_store.total_size_bytes()));
         }
+        node.add("TableStores", table_stores_node.into_tree());
 
         node.into_tree()
     }
