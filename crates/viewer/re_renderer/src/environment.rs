@@ -26,20 +26,6 @@ pub struct Environment {
     pub strength: f32,
 }
 
-/// Shared local reflection capture. Up to two sets of six faces (+X, -X, +Y, -Y, +Z, -Z) in a 3x4 atlas.
-/// RGB is linear radiance and alpha is coverage; uncovered directions use the environment.
-#[derive(Clone, Debug)]
-pub struct SceneReflection {
-    pub atlas: GpuTexture2D,
-    pub origins: [glam::Vec3; 2],
-    pub count: u32,
-    pub bounds_min: glam::Vec3,
-    pub bounds_max: glam::Vec3,
-    /// Fully trusted radius around each capture; fades to zero at twice this radius.
-    /// Zero retains unbounded legacy blending.
-    pub influence_radii: [f32; 2],
-}
-
 /// Mip level of the radiance map for a roughness in [0, 1], given the chain's level count.
 /// Mirrors `environment_specular_along` in `shader/utils/lighting.wgsl`. Borrowed from Karis 2013
 /// (`ComputeReflectionCaptureMipFromRoughness`): a GGX lobe of roughness `r` wants the level
@@ -83,20 +69,6 @@ pub fn equirect_uv_from_direction(dir: glam::Vec3) -> glam::Vec2 {
     let u = 0.5 + dir.x.atan2(-dir.z) / std::f32::consts::TAU;
     let v = dir.y.clamp(-1.0, 1.0).acos() / std::f32::consts::PI;
     glam::vec2(u, v)
-}
-
-/// The one light that casts shadows: the environment's brightest direction, and the picture of what
-/// blocks it (a cookie rendered from the sun; premultiplied tint × coverage). Everything shaded reads it.
-#[derive(Clone, Debug)]
-pub struct SunLight {
-    /// World direction toward the sun.
-    pub direction: glam::Vec3,
-    /// Share of the diffuse light that comes from the sun, in [0, 1]; what a shadow takes away.
-    pub weight: f32,
-    pub color: glam::Vec3,
-    /// World position → cookie uv.
-    pub uv_from_world: glam::Mat4,
-    pub cookie: GpuTexture2D,
 }
 
 /// Direction for the center of an equirectangular texel. Inverse of [`equirect_uv_from_direction`].

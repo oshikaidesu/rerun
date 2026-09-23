@@ -303,50 +303,21 @@ pub struct TargetConfiguration {
     /// What is already drawn beneath this view's meshes, in screen space (premultiplied, with a mip
     /// chain). Transmissive surfaces refract into it; where its alpha is 0 the environment shows.
     pub backdrop: Option<crate::resource_managers::GpuTexture2D>,
-    pub scene_reflection: Option<crate::environment::SceneReflection>,
-    /// The sun and its cookie: surfaces darken by the sun's share where the cookie blocks it.
-    pub light: Option<crate::environment::SunLight>,
-    /// This view *is* the cookie capture: surfaces write what they let through instead of shading.
-    pub light_capture: bool,
+    /// A captured view of the scene (a View resource) the view's surface programs read, e.g. the faces
+    /// of a reflection probe. Bound as `view_capture_texture`.
+    pub view_capture: Option<crate::resource_managers::GpuTexture2D>,
+    /// A coverage picture projected onto the world (a Coverage resource), e.g. what blocks a light.
+    /// Bound as `coverage_texture`.
+    pub coverage: Option<crate::resource_managers::GpuTexture2D>,
+    /// Constants the view's surface programs read (`frame.program_constants`), e.g. where a capture
+    /// was taken or how the coverage is projected. What they mean is the embedder's.
+    pub program_constants: [glam::Vec4; 10],
     /// World geometry closer to the camera than this (along its forward axis) fades out, gone at a third
     /// of it. 0 = never.
     pub near_fade_distance: f32,
-    /// Per-object motion (`array<vec4f>`, four per object: offset + turn, centre + scale, axis, tint + opacity),
-    /// written on the GPU by the embedder. An instance whose last param (`params[23]`, WGSL `params[5].w`) is
-    /// `n > 0` is moved by entry `n - 1` in every vertex stage and tinted by it in the fragment stage. `None`
-    /// binds a zeroed entry.
-    pub motion: Option<MotionBuffer>,
-}
-
-/// A storage buffer of per-object world offsets (see [`TargetConfiguration::motion`]).
-#[derive(Clone)]
-pub struct MotionBuffer(pub crate::wgpu_resources::GpuBuffer);
-
-impl MotionBuffer {
-    /// A pooled storage buffer holding `entries` objects' motion (four vec4 each: offset + turn,
-    /// centre + scale, axis, tint + opacity), zeroed on first allocation.
-    pub fn new(ctx: &RenderContext, entries: u64) -> Self {
-        Self(ctx.gpu_resources.buffers.alloc(
-            &ctx.device,
-            &crate::wgpu_resources::BufferDesc {
-                label: "motion".into(),
-                size: entries.max(1) * 64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            },
-        ))
-    }
-
-    /// The buffer a compute pass writes the offsets into.
-    pub fn buffer(&self) -> &wgpu::Buffer {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for MotionBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MotionBuffer({} bytes)", self.0.size())
-    }
+    /// Per-object data the embedder writes on the GPU (a Motion resource, `array<vec4f>`), bound as
+    /// `motion`: a program's `program_motion` / `program_tint` hooks read it. `None` binds a zeroed entry.
+    pub motion: Option<crate::wgpu_resources::GpuBuffer>,
 }
 
 fn environment_bindings(
@@ -359,12 +330,9 @@ fn environment_bindings(
         radiance: environment.map_or(zero, |e| e.radiance.handle()),
         irradiance: environment.map_or(zero, |e| e.irradiance.handle()),
         backdrop: config.backdrop.as_ref().map_or(zero, |b| b.handle()),
-        reflection: config
-            .scene_reflection
-            .as_ref()
-            .map_or(zero, |r| r.atlas.handle()),
-        light_cookie: config.light.as_ref().map_or(zero, |l| l.cookie.handle()),
-        motion: config.motion.as_ref().map(|m| m.0.handle),
+        view_capture: config.view_capture.as_ref().map_or(zero, |c| c.handle()),
+        coverage: config.coverage.as_ref().map_or(zero, |c| c.handle()),
+        motion: config.motion.as_ref().map(|m| m.handle),
     }
 }
 
@@ -387,9 +355,9 @@ impl Default for TargetConfiguration {
             picking_config: None,
             environment: None,
             backdrop: None,
-            scene_reflection: None,
-            light: None,
-            light_capture: false,
+            view_capture: None,
+            coverage: None,
+            program_constants: [glam::Vec4::ZERO; 10],
             near_fade_distance: 0.0,
             motion: None,
         }
@@ -694,47 +662,12 @@ impl ViewBuilder {
             ),
             environment_strength: config.environment.as_ref().map_or(0.0, |e| e.strength),
             environment_present: config.environment.is_some() as u32,
-            reflection_origin: config
-                .scene_reflection
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.origins[0].extend(r.count as f32))
-                .into(),
-            reflection_origin_second: config
-                .scene_reflection
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.origins[1].extend(r.influence_radii[0]))
-                .into(),
-            reflection_min: config
-                .scene_reflection
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.bounds_min.extend(r.influence_radii[1]))
-                .into(),
-            reflection_max: config
-                .scene_reflection
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.bounds_max.extend(0.0))
-                .into(),
             environment_from_world: config
                 .environment
                 .as_ref()
                 .map_or(glam::Mat3::IDENTITY, |e| e.environment_from_world)
                 .into(),
-            sun_direction: config
-                .light
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |l| l.direction.extend(l.weight))
-                .into(),
-            sun_color: config
-                .light
-                .as_ref()
-                .map_or(glam::Vec3::ZERO, |l| l.color)
-                .extend(if config.light_capture { 1.0 } else { 0.0 })
-                .into(),
-            light_uv_from_world: config
-                .light
-                .as_ref()
-                .map_or(glam::Mat4::IDENTITY, |l| l.uv_from_world)
-                .into(),
+            program_constants: config.program_constants.map(Into::into),
             near_fade: glam::vec4(config.near_fade_distance.max(0.0), 0.0, 0.0, 0.0).into(),
             _end_padding: Default::default(),
         };
@@ -855,7 +788,7 @@ impl ViewBuilder {
         Ok(view_builder)
     }
 
-    /// Motolii presentable seam(裁定256). Does not change [`Self::new`].
+    /// Does not change [`Self::new`].
     pub fn new_with_external_resolved(
         ctx: &RenderContext,
         config: TargetConfiguration,
@@ -1003,47 +936,12 @@ impl ViewBuilder {
             ),
             environment_strength: config.environment.as_ref().map_or(0.0, |e| e.strength),
             environment_present: config.environment.is_some() as u32,
-            reflection_origin: config
-                .scene_reflection
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.origins[0].extend(r.count as f32))
-                .into(),
-            reflection_origin_second: config
-                .scene_reflection
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.origins[1].extend(r.influence_radii[0]))
-                .into(),
-            reflection_min: config
-                .scene_reflection
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.bounds_min.extend(r.influence_radii[1]))
-                .into(),
-            reflection_max: config
-                .scene_reflection
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |r| r.bounds_max.extend(0.0))
-                .into(),
             environment_from_world: config
                 .environment
                 .as_ref()
                 .map_or(glam::Mat3::IDENTITY, |e| e.environment_from_world)
                 .into(),
-            sun_direction: config
-                .light
-                .as_ref()
-                .map_or(glam::Vec4::ZERO, |l| l.direction.extend(l.weight))
-                .into(),
-            sun_color: config
-                .light
-                .as_ref()
-                .map_or(glam::Vec3::ZERO, |l| l.color)
-                .extend(if config.light_capture { 1.0 } else { 0.0 })
-                .into(),
-            light_uv_from_world: config
-                .light
-                .as_ref()
-                .map_or(glam::Mat4::IDENTITY, |l| l.uv_from_world)
-                .into(),
+            program_constants: config.program_constants.map(Into::into),
             near_fade: glam::vec4(config.near_fade_distance.max(0.0), 0.0, 0.0, 0.0).into(),
             _end_padding: Default::default(),
         };
@@ -1167,7 +1065,7 @@ impl ViewBuilder {
     /// The resolved (non-MSAA) main target texture, in [`Self::MAIN_TARGET_COLOR_FORMAT`]
     /// (sRGB-tagged).
     ///
-    /// Motolii seam: [`Self::composite`] is the only other way to get this view's result out,
+    /// [`Self::composite`] is the only other way to get this view's result out,
     /// but it always writes through `composite.wgsl`'s unmultiply/gamma-encode/premultiply
     /// step and into a render target format fixed by `RenderContext::output_format_color()`.
     /// An embedder that wants to combine several views' output by blending them directly into
@@ -1208,7 +1106,7 @@ impl ViewBuilder {
         Ok(encoder.finish())
     }
 
-    /// Motolii seam: [`Self::draw`] into the caller's encoder, so an embedder recording many
+    /// [`Self::draw`] into the caller's encoder, so an embedder recording many
     /// views (and passes between them) finishes one encoder per frame instead of one per view.
     pub fn draw_into(
         &mut self,

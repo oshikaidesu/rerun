@@ -333,7 +333,7 @@ impl RenderContext {
 
     /// Sister constructor to [`Self::new`] for embedders that already own a [`wgpu::Device`]/
     /// [`wgpu::Queue`] pair and no longer have (or never had) the originating [`wgpu::Adapter`]
-    /// at hand (Motolii 裁定170 §2, BL1b-style second constructor).
+    /// at hand.
     ///
     /// Identical to [`Self::new`] except for how `device_caps`/`adapter_info` are derived:
     /// `DeviceCaps::from_adapter(adapter)` becomes `DeviceCaps::from_device(&device)`, and

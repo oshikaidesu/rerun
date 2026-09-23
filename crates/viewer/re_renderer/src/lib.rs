@@ -114,7 +114,7 @@ pub use size::Size;
 pub use texture_info::Texture2DBufferInfo;
 pub use transform::RectTransform;
 pub use view_builder::{
-    BlendWithBackground, MotionBuffer, RenderMode, ViewBuilder, ViewBuilderId, ViewPickingConfiguration,
+    BlendWithBackground, RenderMode, ViewBuilder, ViewBuilderId, ViewPickingConfiguration,
     backdrop_levels_read,
 };
 pub use wgpu_resources::{

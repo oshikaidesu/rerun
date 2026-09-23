@@ -267,8 +267,8 @@ impl PickingLayerProcessor {
                 radiance: ctx.texture_manager_2d.zeroed_texture_float().handle,
                 irradiance: ctx.texture_manager_2d.zeroed_texture_float().handle,
                 backdrop: ctx.texture_manager_2d.zeroed_texture_float().handle,
-                reflection: ctx.texture_manager_2d.zeroed_texture_float().handle,
-                light_cookie: ctx.texture_manager_2d.zeroed_texture_float().handle,
+                view_capture: ctx.texture_manager_2d.zeroed_texture_float().handle,
+                coverage: ctx.texture_manager_2d.zeroed_texture_float().handle,
                 motion: None,
             },
         );

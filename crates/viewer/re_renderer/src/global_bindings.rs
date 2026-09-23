@@ -56,15 +56,8 @@ pub struct FrameUniformBuffer {
     /// Rotation applied to world directions before the equirectangular lookup.
     pub environment_from_world: wgpu_buffer_types::Mat3,
 
-    pub reflection_origin: wgpu_buffer_types::Vec4,
-    pub reflection_origin_second: wgpu_buffer_types::Vec4,
-    pub reflection_min: wgpu_buffer_types::Vec4,
-    pub reflection_max: wgpu_buffer_types::Vec4,
-    /// xyz: world direction toward the sun; w: its share of the diffuse light (0 = none bound).
-    pub sun_direction: wgpu_buffer_types::Vec4,
-    /// rgb: the sun's tint; w: 1 while the light cookie is captured.
-    pub sun_color: wgpu_buffer_types::Vec4,
-    pub light_uv_from_world: wgpu_buffer_types::Mat4,
+    /// Constants the view's surface programs read (`TargetConfiguration::program_constants`).
+    pub program_constants: [wgpu_buffer_types::Vec4; 10],
     /// x: camera-forward depth below which world geometry starts to fade (0 = never); it is gone at x / 3.
     pub near_fade: wgpu_buffer_types::Vec4,
     pub _end_padding: [wgpu_buffer_types::PaddingRow; 2],
@@ -87,13 +80,14 @@ pub struct GlobalBindings {
 pub struct EnvironmentBindings {
     pub radiance: GpuTextureHandle,
     pub irradiance: GpuTextureHandle,
-    /// Screen-space picture already composited beneath this view's meshes (premultiplied, with a
-    /// mip chain), read by transmissive surfaces. Zero texture when there is none.
+    /// Screen-space picture already composited beneath this view's surfaces (premultiplied, with a
+    /// mip chain). Zero texture when there is none.
     pub backdrop: GpuTextureHandle,
-    pub reflection: GpuTextureHandle,
-    /// Blockers seen from the sun (premultiplied tint × coverage). Zero texture when there is none.
-    pub light_cookie: GpuTextureHandle,
-    /// Per-object world offsets written by the embedder on the GPU (see [`crate::view_builder::TargetConfiguration::motion`]).
+    /// See [`crate::view_builder::TargetConfiguration::view_capture`]. Zero texture when there is none.
+    pub view_capture: GpuTextureHandle,
+    /// See [`crate::view_builder::TargetConfiguration::coverage`]. Zero texture when there is none.
+    pub coverage: GpuTextureHandle,
+    /// See [`crate::view_builder::TargetConfiguration::motion`].
     pub motion: Option<crate::wgpu_resources::GpuBufferHandle>,
 }
 
@@ -324,8 +318,8 @@ impl GlobalBindings {
                     BindGroupEntry::Sampler(self.equirect_sampler),
                     BindGroupEntry::DefaultTextureView(environment.backdrop),
                     BindGroupEntry::Sampler(self.screen_sampler),
-                    BindGroupEntry::DefaultTextureView(environment.reflection),
-                    BindGroupEntry::DefaultTextureView(environment.light_cookie),
+                    BindGroupEntry::DefaultTextureView(environment.view_capture),
+                    BindGroupEntry::DefaultTextureView(environment.coverage),
                     BindGroupEntry::Buffer {
                         handle: environment.motion.unwrap_or(self.zero_motion.handle),
                         offset: 0,

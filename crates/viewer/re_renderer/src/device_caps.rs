@@ -275,7 +275,7 @@ impl DeviceCaps {
     /// the originating [`wgpu::Adapter`] to still be around.
     ///
     /// This exists for embedders that own the `Device`/`Queue` pair themselves and hand it down
-    /// to `re_renderer` (Motolii 裁定170 §2, BL1b-style second constructor) — the adapter may
+    /// to `re_renderer` — the adapter may
     /// already be gone by the time `re_renderer` gets involved.
     ///
     /// Unlike [`Self::from_adapter`] / [`Self::from_adapter_without_validation`], this cannot

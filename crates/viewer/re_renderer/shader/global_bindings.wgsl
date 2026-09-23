@@ -40,17 +40,9 @@ struct FrameUniformBuffer {
 
     /// Rotation applied to world directions before the equirectangular lookup.
     environment_from_world: mat3x3f,
-    reflection_origin: vec4f,
-    reflection_origin_second: vec4f,
-    reflection_min: vec4f,
-    reflection_max: vec4f,
-    /// xyz: world direction toward the sun (the environment's brightest texel); w: the share of the
-    /// diffuse light that comes from it. 0 = no sun bound, nothing casts a shadow.
-    sun_direction: vec4f,
-    /// rgb: the sun's tint. w = 1 while the light cookie is captured: surfaces then write what they let through.
-    sun_color: vec4f,
-    /// World → light cookie uv (orthographic, looking along the sun).
-    light_uv_from_world: mat4x4f,
+    /// Constants the view's surface programs read; what they mean is the embedder's
+    /// (`TargetConfiguration::program_constants`).
+    program_constants: array<vec4f, 10>,
     /// x: camera-forward depth below which world geometry starts to fade (0 = never); it is gone at x / 3.
     near_fade: vec4f,
 };
@@ -75,12 +67,13 @@ var backdrop_texture: texture_2d<f32>;
 @group(0) @binding(8)
 var screen_sampler: sampler;
 
+/// A captured view of the scene the view's surface programs read (`TargetConfiguration::view_capture`).
 @group(0) @binding(9)
-var scene_reflection: texture_2d<f32>;
+var view_capture_texture: texture_2d<f32>;
 
-/// What the sun's light meets on its way: premultiplied tint × coverage of the blockers, seen from the sun.
+/// A coverage picture projected onto the world (`TargetConfiguration::coverage`).
 @group(0) @binding(10)
-var light_cookie: texture_2d<f32>;
+var coverage_texture: texture_2d<f32>;
 
 /// Per-object data the embedder writes on the GPU (a motion resource). The renderer only binds it:
 /// a program's `program_motion` / `program_tint` hooks decide what it means (see mesh_program.rs).

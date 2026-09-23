@@ -25,6 +25,15 @@ pub struct DynamicResource<Handle, Desc: Debug, Res> {
     pub handle: Handle,
 }
 
+impl<Handle: Debug, Desc: Debug, Res> Debug for DynamicResource<Handle, Desc, Res> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicResource")
+            .field("handle", &self.handle)
+            .field("creation_desc", &self.creation_desc)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<Handle, Desc, Res> std::ops::Deref for DynamicResource<Handle, Desc, Res>
 where
     Desc: Debug,
