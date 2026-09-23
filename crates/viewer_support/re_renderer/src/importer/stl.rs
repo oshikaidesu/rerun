@@ -50,6 +50,7 @@ pub fn load_stl_from_buffer(
         albedo_is_premultiplied: false,
         albedo_is_cutout: false,
         field_at_texcoord: false,
+        texcoord_frame: None,
         curves: None,
         label: name.clone(),
         index_range: re_span::Span::from_start_len(0, num_vertices as u32),

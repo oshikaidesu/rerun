@@ -241,6 +241,7 @@ fn import_geometry(
             albedo_is_premultiplied: false,
             albedo_is_cutout: false,
             field_at_texcoord: false,
+            texcoord_frame: None,
             curves: None,
             label: label.clone(),
             index_range: re_span::Span::from_start_len(vertex_offset, group_vertex_count),

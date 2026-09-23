@@ -124,6 +124,7 @@ pub fn load_ply_from_buffer(
         albedo_is_premultiplied: false,
         albedo_is_cutout: false,
         field_at_texcoord: false,
+        texcoord_frame: None,
         curves: None,
     };
 

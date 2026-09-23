@@ -10,6 +10,8 @@ struct SurfaceIn {
     /// Instance scale (length of one axis of world_from_mesh): the slab a refracted ray crosses.
     thickness: f32,
     params: array<vec4f, 6>,
+    /// Where on the surface's picture: 0..1 across it, the same for an image, a shape and a mesh's
+    /// own UV.
     uv: vec2f,
     coverage: f32,
 };

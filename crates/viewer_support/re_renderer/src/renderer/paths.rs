@@ -443,6 +443,7 @@ impl PathDrawDataBuilder {
                     albedo_is_premultiplied: false,
                     albedo_is_cutout: false,
                     field_at_texcoord: false,
+                    texcoord_frame: None,
                     curves,
                     label: label.into(),
                     index_range: re_span::Span::from_start_end(range.start, range.end),

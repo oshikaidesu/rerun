@@ -200,6 +200,10 @@ pub struct Material {
     /// its position, e.g. a stroke whose texcoord is its centreline point keeps its width under the
     /// field.
     pub field_at_texcoord: bool,
+    /// The texcoords that span the surface's picture, as `(origin, size)`, when they are in some
+    /// other unit (a path's texcoords are its points): a surface program's `SurfaceIn::uv` is
+    /// `(texcoord - origin) / size`, 0..1 across the picture. `None`: the texcoords are the uv.
+    pub texcoord_frame: Option<(glam::Vec2, glam::Vec2)>,
     /// Coverage comes from these curves, evaluated per fragment, instead of the triangles' edges:
     /// the triangles only need to cover the curves' bounds. Exact at any magnification.
     pub curves: Option<std::sync::Arc<CurveFill>>,
@@ -309,7 +313,8 @@ pub(crate) mod gpu_data {
         gradient_kind: wgpu_buffer_types::U32RowPadded,
         gradient_line: wgpu_buffer_types::Vec4,
         gradient_space: wgpu_buffer_types::Vec4,
-        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 8],
+        uv_frame: wgpu_buffer_types::Vec4,
+        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 9],
     }
 
     impl MaterialUniformBuffer {
@@ -317,6 +322,7 @@ pub(crate) mod gpu_data {
             albedo_factor: ecolor::Rgba,
             texture_format: TextureFormat,
             field_at_texcoord: bool,
+            texcoord_frame: Option<(glam::Vec2, glam::Vec2)>,
             curves: Option<&super::CurveFill>,
         ) -> Self {
             let gradient = curves.and_then(|fill| fill.gradient.as_ref());
@@ -340,6 +346,11 @@ pub(crate) mod gpu_data {
                             g.space_scale.x,
                             g.space_scale.y,
                         )
+                    })
+                    .into(),
+                uv_frame: texcoord_frame
+                    .map_or(glam::vec4(0.0, 0.0, 1.0, 1.0), |(origin, size)| {
+                        glam::vec4(origin.x, origin.y, size.x, size.y)
                     })
                     .into(),
                 end_padding: Default::default(),
@@ -447,6 +458,7 @@ impl GpuMesh {
                             gpu_data::TextureFormat::Rgba
                         },
                         material.field_at_texcoord,
+                        material.texcoord_frame,
                         material.curves.as_deref(),
                     )
                 }),

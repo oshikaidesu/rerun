@@ -43,6 +43,8 @@ struct MaterialUniformBuffer {
     gradient_line: vec4f,
     // The gradient's space in texcoord units: origin.xy, scale.zw.
     gradient_space: vec4f,
+    // The texcoords spanning the picture: origin.xy, size.zw (`SurfaceIn::uv` is 0..1 across it).
+    uv_frame: vec4f,
 };
 
 const GRADIENT_LINEAR: u32 = 1;
@@ -329,7 +331,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if coverage <= 0.0 {
         return vec4f(0.0);
     }
-    let radiance = program_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position.xyz, in.world_position.w, params, in.texcoord, coverage));
+    let radiance = program_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position.xyz, in.world_position.w, params, (in.texcoord - material.uv_frame.xy) / material.uv_frame.zw, coverage));
     return vec4f(radiance * coverage, coverage);
 }
 
