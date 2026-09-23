@@ -646,6 +646,26 @@ impl CpuWriteGpuReadBelt {
         }
     }
 
+    /// After a submission that is not the end of a frame: the closed chunks go back to be mapped
+    /// again, without the per-frame accounting (the peak estimate and shrinking are per frame, and
+    /// an embedder that submits several times in one frame would otherwise shrink the belt to one
+    /// submission's worth and allocate fresh buffers all frame long).
+    pub fn after_submit_within_frame(&mut self) {
+        re_tracing::profile_function!();
+        self.receive_chunks();
+        let sender = &self.sender;
+        for chunk in self.closed_chunks.drain(..) {
+            let sender = sender.clone();
+            chunk
+                .buffer
+                .clone()
+                .slice(..)
+                .map_async(wgpu::MapMode::Write, move |_| {
+                    sender.send(chunk).ok();
+                });
+        }
+    }
+
     /// Move all chunks that the GPU is done with (and are now mapped again)
     /// from `self.receiver` to `self.free_chunks`.
     fn receive_chunks(&mut self) {
