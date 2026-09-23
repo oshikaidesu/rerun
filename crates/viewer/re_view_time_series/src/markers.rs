@@ -155,9 +155,9 @@ pub fn marker_instance(
         outline_mask_ids: OutlineMaskPreference::NONE,
         picking_layer_id: PickingLayerId::default(),
         cull_mode: None,
-    },
-    program: None,
-    params: [0.0; 12],
+        program: None,
+        params: [0.0; 24],
+    }
 }
 
 /// Build a flat 2D unit-radius mesh for the given marker shape.

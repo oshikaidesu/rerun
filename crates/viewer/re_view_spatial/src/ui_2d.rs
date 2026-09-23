@@ -533,6 +533,7 @@ fn setup_target_config(
             outline_config: any_outlines.then(|| re_view::outline_config(egui_painter.ctx())),
             blend_with_background: re_renderer::BlendWithBackground::No,
             picking_config,
+            ..Default::default()
         }
     })
 }

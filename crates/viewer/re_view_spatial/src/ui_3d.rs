@@ -264,6 +264,7 @@ impl SpatialView3D {
                 .then(|| re_view::outline_config(ui.ctx())),
             blend_with_background: re_renderer::BlendWithBackground::No,
             picking_config,
+            ..Default::default()
         };
 
         let mut view_builder = ViewBuilder::new(

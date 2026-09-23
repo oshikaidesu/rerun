@@ -737,6 +737,10 @@ fn materials_for_uncolored_mesh(
             .white_texture_unorm_handle()
             .clone(),
         albedo_factor: re_renderer::Rgba::BLACK,
+        albedo_is_premultiplied: false,
+        albedo_is_opaque_picture: false,
+        field_anchor: false,
+        curves: None,
     }]
 }
 

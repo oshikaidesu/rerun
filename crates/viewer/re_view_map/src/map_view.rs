@@ -439,6 +439,7 @@ fn create_view_builder(
             blend_with_background: re_renderer::BlendWithBackground::AlphaToCoverage,
 
             picking_config,
+            ..Default::default()
         },
         view_id,
     )
