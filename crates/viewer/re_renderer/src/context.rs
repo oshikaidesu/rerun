@@ -410,6 +410,7 @@ impl RenderContext {
             before_view_builder_encoder: Mutex::new(FrameGlobalCommandEncoder::new(&device)),
             frame_index: STARTUP_FRAME_IDX,
             num_view_builders_created: AtomicU64::new(0),
+            frame_commands: Mutex::new(Vec::new()),
         };
 
         // Register shader workarounds for the current device.
@@ -503,6 +504,7 @@ impl RenderContext {
             .lock()
             .0
             .is_some()
+            || !self.active_frame.frame_commands.lock().is_empty()
         {
             if self.active_frame.frame_index != STARTUP_FRAME_IDX {
                 re_log::error!("There was still a command encoder from the previous frame at the beginning of the current.
@@ -534,6 +536,7 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
             before_view_builder_encoder: Mutex::new(FrameGlobalCommandEncoder::new(&self.device)),
             frame_index: self.active_frame.frame_index.wrapping_add(1),
             num_view_builders_created: AtomicU64::new(0),
+            frame_commands: Mutex::new(Vec::new()),
         };
         let frame_index = self.active_frame.frame_index;
 
@@ -559,6 +562,7 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
                 bind_groups,
                 pipeline_layouts,
                 render_pipelines,
+                compute_pipelines,
                 samplers,
                 shader_modules,
                 textures,
@@ -569,6 +573,12 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
             // recompilation picks up all shaders that have been recompiled this frame.
             shader_modules.begin_frame(&self.device, &self.resolver, frame_index, &modified_paths);
             render_pipelines.begin_frame(
+                &self.device,
+                frame_index,
+                shader_modules,
+                pipeline_layouts,
+            );
+            compute_pipelines.begin_frame(
                 &self.device,
                 frame_index,
                 shader_modules,
@@ -605,29 +615,48 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
         }
     }
 
-    pub fn before_submit(&mut self) {
+    ///
+    /// Submits the frame-global encoder, then every command buffer queued with
+    /// [`Self::queue_commands`], in one submission. Returns it when there was anything to submit.
+    pub fn before_submit(&mut self) -> Option<wgpu::SubmissionIndex> {
         re_tracing::profile_function!();
 
         // Unmap all write staging buffers, so we don't get validation errors about buffers still being mapped
         // that the gpu wants to read from.
         self.cpu_write_gpu_read_belt.lock().before_queue_submit();
 
-        if let Some(command_encoder) = self
+        let frame_global = self
             .active_frame
             .before_view_builder_encoder
             .lock()
             .0
             .take()
-        {
-            re_tracing::profile_scope!("finish & submit frame-global encoder");
-            let command_buffer = command_encoder.finish();
-
-            // TODO(andreas): For better performance, we should try to bundle this with the single submit call that is currently happening in eframe.
-            //                  How do we hook in there and make sure this buffer is submitted first?
-            self.inflight_queue_submissions
-                .push(self.queue.submit([command_buffer]));
+            .map(|command_encoder| {
+                re_tracing::profile_scope!("finish frame-global encoder");
+                command_encoder.finish()
+            });
+        let queued = std::mem::take(&mut *self.active_frame.frame_commands.lock());
+        if frame_global.is_none() && queued.is_empty() {
+            return None;
         }
+
+        // TODO(andreas): For better performance, we should try to bundle this with the single submit call that is currently happening in eframe.
+        //                  How do we hook in there and make sure this buffer is submitted first?
+        re_tracing::profile_scope!("submit frame");
+        let submission = self.queue.submit(frame_global.into_iter().chain(queued));
+        self.inflight_queue_submissions.push(submission.clone());
+        Some(submission)
     }
+
+    /// Queues command buffers recorded for this frame. [`Self::before_submit`] submits them after
+    /// the frame-global encoder (whose uploads they may read), in the order they were queued.
+    ///
+    /// For an embedder that records its own passes (offscreen views, effects) and submits them with
+    /// the frame, instead of keeping a list of its own.
+    pub fn queue_commands(&self, commands: impl IntoIterator<Item = wgpu::CommandBuffer>) {
+        self.active_frame.frame_commands.lock().extend(commands);
+    }
+
 
     /// Gets a renderer with the specified type, initializing it if necessary.
     pub fn renderer<R: 'static + Renderer + Send + Sync>(
@@ -728,6 +757,10 @@ pub struct ActiveFrameContext {
 
     /// Number of view builders created in this frame so far.
     pub num_view_builders_created: AtomicU64,
+
+    /// Command buffers queued for this frame, submitted by [`RenderContext::before_submit`] after the
+    /// frame-global encoder.
+    frame_commands: Mutex<Vec<wgpu::CommandBuffer>>,
 }
 
 impl ActiveFrameContext {

@@ -297,6 +297,7 @@ impl DevPanel {
                     num_bind_group_layouts,
                     num_pipeline_layouts,
                     num_render_pipelines,
+                    num_compute_pipelines,
                     num_samplers,
                     num_shader_modules,
                     num_bind_groups,
@@ -314,6 +315,9 @@ impl DevPanel {
                 ui.end_row();
                 ui.label("# Render Pipelines:");
                 ui.label(num_render_pipelines.to_string());
+                ui.end_row();
+                ui.label("# Compute Pipelines:");
+                ui.label(num_compute_pipelines.to_string());
                 ui.end_row();
                 ui.label("# Samplers:");
                 ui.label(num_samplers.to_string());

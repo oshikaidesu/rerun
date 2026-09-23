@@ -119,7 +119,9 @@ pub use view_builder::{
     backdrop_levels_read,
 };
 pub use wgpu_resources::{
-    BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
+    BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, BufferDesc, ComputePipelineCreationError,
+    ComputePipelineDesc, GpuBindGroup, GpuBindGroupLayoutHandle, GpuBuffer, GpuBufferHandle,
+    GpuBufferPool, GpuComputePipelineHandle, GpuComputePipelinePool, GpuComputePipelinePoolAccessor,
     GpuPipelineLayoutPool, GpuRenderPipelineHandle, GpuRenderPipelinePool,
     GpuRenderPipelinePoolAccessor, GpuSamplerHandle, GpuSamplerPool, GpuShaderModuleHandle,
     GpuShaderModulePool, GpuTexture, GpuTextureHandle, PipelineLayoutDesc, RenderPipelineDesc,
