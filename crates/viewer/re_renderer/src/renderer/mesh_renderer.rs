@@ -660,8 +660,7 @@ impl Renderer for MeshRenderer {
             pipeline_layout,
             MeshProgramDesc {
                 label: "default".into(),
-                field: None,
-                surface: None,
+                ..Default::default()
             },
         )
         .expect("the default mesh program composes from embedded shaders");

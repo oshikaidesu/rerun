@@ -3,7 +3,6 @@
 #import <./rectangle.wgsl>
 #import <./utils/srgb.wgsl>
 #import <./utils/interpolation.wgsl>
-#import <./utils/noise.wgsl>
 #import <./utils/field.wgsl>
 
 fn is_magnifying(pixel_coord: vec2f) -> bool {
@@ -108,7 +107,7 @@ fn sample_field(in: VertexOut) -> FieldSample {
     let frame_position = in.texcoord.x * eu + in.texcoord.y * ev;
     let cross_normal = cross(eu, ev);
     let n = cross_normal / max(length(cross_normal), 1e-6);
-    let field = motolii_field(FieldIn(frame_position, n, rect_info.surface_params));
+    let field = program_field(FieldIn(frame_position, n, rect_info.surface_params));
     if rect_info.field_grid >= 2.0 {
         // The vertex stage moved the picture itself; shifting the sample as well would apply the
         // field twice. The normal is still the field's.
@@ -238,8 +237,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     }
     let surface = SurfaceIn(texture_color.rgb / coverage, normal, view_dir,
         in.world_position, rect_info.surface_thickness, rect_info.surface_params, sampled.texcoord, coverage);
-    let tint = motion_tint(rect_info.surface_params[5].w);
-    return vec4f(motolii_surface(surface) * coverage * tint.rgb, coverage) * tint.a * rect_info.multiplicative_tint * near_fade(in.world_position);
+    let tint = program_tint(rect_info.surface_params[5].w);
+    return vec4f(program_surface(surface) * coverage * tint.rgb, coverage) * tint.a * rect_info.multiplicative_tint * near_fade(in.world_position);
 }
 
 @fragment

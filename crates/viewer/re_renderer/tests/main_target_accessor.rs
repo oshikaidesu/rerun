@@ -1,11 +1,10 @@
-//! Motolii seam: proves `ViewBuilder::main_target()` (added in this fork) is a live read
-//! seat onto the resolved main target, not a dead accessor.
+//! `ViewBuilder::main_target()` is a live read seat onto the resolved main target, not a dead
+//! accessor.
 //!
-//! See `docs/reviews/2026-08-21-blend-fork-accessor-decision.md` and BL1b in Motolii for why
-//! this exists: `ViewBuilder::composite()` is the only other public way to read a view's
-//! result, and it always round-trips through `composite.wgsl`'s gamma encode into a fixed,
-//! non-sRGB-tagged output format. `main_target()` gives direct read access to the sRGB-tagged
-//! (linear-mixed) intermediate instead, before that round-trip.
+//! `ViewBuilder::composite()` is the only other public way to read a view's result, and it always
+//! round-trips through `composite.wgsl`'s gamma encode into a fixed, non-sRGB-tagged output format.
+//! `main_target()` gives an embedder that composes views offscreen direct read access to the
+//! sRGB-tagged (linear-mixed) intermediate instead, before that round-trip.
 
 use re_renderer::device_caps;
 use re_renderer::view_builder::{Projection, RenderMode, TargetConfiguration, ViewBuilder};
@@ -42,7 +41,7 @@ fn main_target_reflects_the_view_that_was_drawn() {
     let mut view_builder = ViewBuilder::new(
         &ctx,
         TargetConfiguration {
-            name: "motolii-main-target-accessor-test".into(),
+            name: "main-target-accessor-test".into(),
             render_mode: RenderMode::Deterministic,
             resolution_in_pixel,
             projection_from_view: Projection::Perspective {

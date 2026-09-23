@@ -329,7 +329,7 @@ impl MotionBuffer {
         Self(ctx.gpu_resources.buffers.alloc(
             &ctx.device,
             &crate::wgpu_resources::BufferDesc {
-                label: "motolii-motion".into(),
+                label: "motion".into(),
                 size: entries.max(1) * 64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,

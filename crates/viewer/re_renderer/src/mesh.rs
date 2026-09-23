@@ -193,7 +193,7 @@ pub struct Material {
     /// The premultiplied picture's coverage is already the geometry's outline (an extruded layer):
     /// the surface is an opaque volume — un-premultiplied colour, full coverage, depth-tested.
     pub albedo_is_opaque_picture: bool,
-    /// The vertex field (`motolii_field`) is evaluated at the vertex's texcoord (x, y, 0) instead of
+    /// The vertex field (`program_field`) is evaluated at the vertex's texcoord (x, y, 0) instead of
     /// its position: a stroked path stores the centreline point there, so both sides of a line move
     /// together and the line keeps its width under the field.
     pub field_anchor: bool,

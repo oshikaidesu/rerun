@@ -1,10 +1,6 @@
 #import <./rectangle_fragment.wgsl>
 
-fn motolii_field(in: FieldIn) -> FieldOut { return FieldOut(vec3f(0.0), in.normal); }
-
-fn motolii_surface(in: SurfaceIn) -> vec3f {
-    if frame.sun_color.w > 0.0 {
-        return vec3f(0.0); // an unlit picture is an opaque blocker in the light cookie
-    }
-    return in.albedo * sun_shade(in.world_position, in.normal, 0.5);
-}
+// A rectangle without a surface program: its picture as it is.
+fn program_field(in: FieldIn) -> FieldOut { return FieldOut(vec3f(0.0), in.normal); }
+fn program_tint(slot: f32) -> vec4f { return vec4f(1.0); }
+fn program_surface(in: SurfaceIn) -> vec3f { return in.albedo; }

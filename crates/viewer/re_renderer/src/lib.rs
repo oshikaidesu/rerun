@@ -35,7 +35,6 @@ pub mod device_caps;
 pub mod environment;
 pub mod importer;
 pub mod mesh;
-pub mod noise;
 pub mod renderer;
 pub mod resource_managers;
 pub mod texture_info;

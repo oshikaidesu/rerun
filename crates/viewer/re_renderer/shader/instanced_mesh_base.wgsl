@@ -3,14 +3,15 @@
 #import <./mesh_vertex.wgsl>
 #import <./utils/srgb.wgsl>
 #import <./utils/lighting.wgsl>
-#import <./utils/noise.wgsl>
 #import <./utils/clip.wgsl>
 
-// This file is never compiled alone: `MeshProgram` appends the two hooks below
-// (defaults or the embedder's own) and compiles the result. See mesh_program.rs.
+// This file is never compiled alone: a `SurfaceProgram` appends the hooks below (defaults or the
+// embedder's own) and compiles the result. See mesh_program.rs.
 //
-//   fn motolii_field(in: FieldIn) -> FieldOut        moves a vertex in the instance frame
-//   fn motolii_surface(in: SurfaceIn) -> vec3f       radiance leaving a shaded fragment
+//   fn program_field(in: FieldIn) -> FieldOut                   moves a vertex in the instance frame
+//   fn program_motion(slot: f32, world_position: vec3f) -> vec3f moves a placed vertex in the world
+//   fn program_tint(slot: f32) -> vec4f                          multiplies a fragment (premultiplied)
+//   fn program_surface(in: SurfaceIn) -> vec3f                   radiance leaving a shaded fragment
 
 #import <./utils/field.wgsl>
 
@@ -220,7 +221,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
         world_normal = (cross(col1, col2) * in_vertex.normal.x + cross(col2, col0) * in_vertex.normal.y + cross(col0, col1) * in_vertex.normal.z) / det;
     }
     let placed_position = frame_position + translation;
-    var world_position = placed_position + motion_offset(in_instance.params5.w, placed_position);
+    var world_position = placed_position + program_motion(in_instance.params5.w, placed_position);
     let params = array<vec4f, 6>(in_instance.params0, in_instance.params1, in_instance.params2, in_instance.params3, in_instance.params4, in_instance.params5);
     // Where the field is sampled: the vertex, or its anchor (a stroke's centreline point) so a line's
     // two sides move together and the width survives.
@@ -233,7 +234,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
         dot(in_instance.world_from_mesh_row_1.xyz, sample),
         dot(in_instance.world_from_mesh_row_2.xyz, sample),
     );
-    let field = motolii_field(FieldIn(frame_sample, world_normal, params));
+    let field = program_field(FieldIn(frame_sample, world_normal, params));
     world_position += field.offset;
     world_normal = field.normal;
 
@@ -299,7 +300,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     // The additive tint linear space with unmultiplied/separate (!!) alpha.
     albedo += vec4f(in.additive_tint_rgba.rgb, 0.0);
     albedo *= in.additive_tint_rgba.a;
-    let tint = motion_tint(in.params5.w);
+    let tint = program_tint(in.params5.w);
     albedo = vec4f(albedo.rgb * tint.rgb, albedo.a) * tint.a;
     albedo *= near_fade(in.world_position.xyz);
 
@@ -323,7 +324,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     if coverage <= 0.0 {
         return vec4f(0.0);
     }
-    let radiance = motolii_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position.xyz, in.world_position.w, params, in.texcoord, coverage));
+    let radiance = program_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position.xyz, in.world_position.w, params, in.texcoord, coverage));
     return vec4f(radiance * coverage, coverage);
 }
 

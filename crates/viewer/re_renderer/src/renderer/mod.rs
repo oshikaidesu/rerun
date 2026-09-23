@@ -21,7 +21,7 @@ pub use paths::{
     PathRenderer, PathStroke, PathVertex, fill_triangles, flattened_contours,
 };
 pub use mesh_program::{
-    DEFAULT_FIELD, DEFAULT_SURFACE, MeshProgram, MeshProgramDesc, SurfaceProgram,
+    DEFAULT_FIELD, DEFAULT_MOTION, DEFAULT_RECTANGLE_SURFACE, DEFAULT_SURFACE, MeshProgram, MeshProgramDesc, SurfaceProgram,
     SurfaceProgramDesc, compose_source as compose_mesh_program_source,
 };
 pub use mesh_renderer::{GpuMeshInstance, MeshDrawData};

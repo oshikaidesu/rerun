@@ -1,9 +1,14 @@
-//! A compiled variant of the mesh shader with the embedder's hooks appended.
+//! A compiled variant of the mesh and rectangle shaders with the embedder's hooks appended.
 //!
-//! `instanced_mesh_base.wgsl` calls two functions it does not define — `motolii_field` (vertex) and
-//! `motolii_surface` (fragment). A [`SurfaceProgram`] appends either the defaults or the embedder's own
-//! WGSL, writes the composed file next to the base shader (or a temp dir when shaders load from disk),
-//! and builds the full pipeline set. Instances point at a program; the renderer batches by it.
+//! `instanced_mesh_base.wgsl` and `rectangle_fragment.wgsl` / `rectangle_vertex.wgsl` call functions
+//! they do not define: `program_field` and `program_motion` (vertex), `program_tint` and
+//! `program_surface` (fragment). A [`SurfaceProgram`] appends either the defaults or the embedder's
+//! own WGSL, writes the composed file next to the base shader (or a temp dir when shaders load from
+//! disk), and builds the full pipeline set. Instances point at a program; the renderer batches by it.
+//!
+//! The hooks read the frame's resources through the global bindings (the environment, the backdrop,
+//! the per-object `motion` storage, ...) and the 24 floats the instance carries; what those mean is
+//! the embedder's.
 
 use std::hash::{Hash as _, Hasher as _};
 use std::path::PathBuf;
@@ -19,20 +24,34 @@ use crate::wgpu_resources::{
 };
 use crate::{Label, RenderContext, include_file};
 
-/// Hook sources. `None` keeps the default (no displacement / matte dielectric). Both hooks reach
-/// meshes and rectangles alike: a rectangle shows the field as a shift of where its picture is sampled.
+/// Hook sources. `None` keeps the default: no displacement, no motion, and the renderer's own shading
+/// (lit meshes, pictures as they are). The hooks reach meshes and rectangles alike: a rectangle
+/// shows the field as a shift of where its picture is sampled.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct SurfaceProgramDesc {
     pub label: String,
-    /// WGSL defining `fn motolii_field(in: FieldIn) -> FieldOut`.
+    /// WGSL the hooks share (functions, constants), included once in every variant.
+    pub prelude: Option<String>,
+    /// WGSL defining `fn program_field(in: FieldIn) -> FieldOut`.
     pub field: Option<String>,
-    /// WGSL defining `fn motolii_surface(in: SurfaceIn) -> vec3f`.
+    /// WGSL defining `fn program_motion(slot: f32, world_position: vec3f) -> vec3f` and
+    /// `fn program_tint(slot: f32) -> vec4f`: what an instance's slot (its last param) does to a
+    /// placed vertex and to a fragment.
+    pub motion: Option<String>,
+    /// WGSL defining `fn program_surface(in: SurfaceIn) -> vec3f` for meshes (and rectangles, unless
+    /// `rectangle_surface` is given).
     pub surface: Option<String>,
+    /// WGSL defining `fn program_surface(in: SurfaceIn) -> vec3f` for rectangles.
+    pub rectangle_surface: Option<String>,
 }
 
 pub const DEFAULT_FIELD: &str =
-    "fn motolii_field(in: FieldIn) -> FieldOut { return FieldOut(vec3f(0.0), in.normal); }";
-pub const DEFAULT_SURFACE: &str = "fn motolii_surface(in: SurfaceIn) -> vec3f { return shade_surface(in.albedo, in.normal, in.view_dir, in.world_position, in.thickness, vec4f(1.0, 0.0, 0.0, 1.5), 0.0); }";
+    "fn program_field(in: FieldIn) -> FieldOut { return FieldOut(vec3f(0.0), in.normal); }";
+pub const DEFAULT_MOTION: &str = "fn program_motion(slot: f32, world_position: vec3f) -> vec3f { return vec3f(0.0); }\nfn program_tint(slot: f32) -> vec4f { return vec4f(1.0); }";
+pub const DEFAULT_SURFACE: &str =
+    "fn program_surface(in: SurfaceIn) -> vec3f { return in.albedo * diffuse_shading(in.normal); }";
+pub const DEFAULT_RECTANGLE_SURFACE: &str =
+    "fn program_surface(in: SurfaceIn) -> vec3f { return in.albedo; }";
 
 pub struct SurfaceProgram {
     pub(crate) rectangle_pipelines: Option<[GpuRenderPipelineHandle; 5]>,
@@ -78,8 +97,10 @@ pub fn compose_source(desc: &SurfaceProgramDesc) -> String {
         "./instanced_mesh_base.wgsl".to_owned()
     };
     format!(
-        "#import <{import}>\n\n{}\n\n{}\n",
+        "#import <{import}>\n\n{}\n\n{}\n\n{}\n\n{}\n",
+        desc.prelude.as_deref().unwrap_or(""),
         desc.field.as_deref().unwrap_or(DEFAULT_FIELD),
+        desc.motion.as_deref().unwrap_or(DEFAULT_MOTION),
         desc.surface.as_deref().unwrap_or(DEFAULT_SURFACE),
     )
 }
@@ -87,7 +108,7 @@ pub fn compose_source(desc: &SurfaceProgramDesc) -> String {
 fn variant_path(desc: &SurfaceProgramDesc) -> PathBuf {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     desc.hash(&mut hasher);
-    let name = format!("motolii_mesh_{:016x}.wgsl", hasher.finish());
+    let name = format!("program_mesh_{:016x}.wgsl", hasher.finish());
     if cfg!(load_shaders_from_disk) {
         std::env::temp_dir()
             .join(format!("re_renderer-mesh-programs-{}", std::process::id()))
@@ -143,15 +164,18 @@ impl SurfaceProgram {
         let import = import_of("rectangle_fragment.wgsl");
         // The vertex stage is part of the variant too: it calls the field to move the grid.
         let import_vs = import_of("rectangle_vertex.wgsl");
-        let field = program.desc.field.as_deref().unwrap_or(DEFAULT_FIELD);
-        let surface = program
-            .desc
-            .surface
+        let desc = &program.desc;
+        let prelude = desc.prelude.as_deref().unwrap_or("");
+        let field = desc.field.as_deref().unwrap_or(DEFAULT_FIELD);
+        let motion = desc.motion.as_deref().unwrap_or(DEFAULT_MOTION);
+        let surface = desc
+            .rectangle_surface
             .as_deref()
-            .unwrap_or("fn motolii_surface(in: SurfaceIn) -> vec3f { return in.albedo; }");
+            .or(desc.surface.as_deref())
+            .unwrap_or(DEFAULT_RECTANGLE_SURFACE);
         write_variant(
             &path,
-            &format!("#import <{import}>\n#import <{import_vs}>\n{field}\n{surface}\n"),
+            &format!("#import <{import}>\n#import <{import_vs}>\n{prelude}\n{field}\n{motion}\n{surface}\n"),
         )?;
         let shader = ctx.gpu_resources.shader_modules.get_or_create(
             ctx,
