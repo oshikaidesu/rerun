@@ -91,8 +91,8 @@ pub fn load_obj_from_buffer(
             // TODO(andreas): proper material loading
             materials: smallvec![Material {
                 albedo_is_premultiplied: false,
-                albedo_is_opaque_picture: false,
-                field_anchor: false,
+                albedo_is_cutout: false,
+                field_at_texcoord: false,
                 curves: None,
                 label: "default material".into(),
                 index_range: 0..mesh.indices.len() as u32,

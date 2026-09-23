@@ -392,8 +392,8 @@ impl PathDrawDataBuilder {
             });
             crate::mesh::Material {
                 albedo_is_premultiplied: false,
-                albedo_is_opaque_picture: false,
-                field_anchor: false,
+                albedo_is_cutout: false,
+                field_at_texcoord: false,
                 curves,
                 label: label.into(),
                 index_range: range,

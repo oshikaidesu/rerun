@@ -190,13 +190,13 @@ pub struct Material {
     pub albedo_factor: Rgba,
     /// The sampled texture contains linear premultiplied RGBA, including coverage.
     pub albedo_is_premultiplied: bool,
-    /// The premultiplied picture's coverage is already the geometry's outline (an extruded layer):
-    /// the surface is an opaque volume — un-premultiplied colour, full coverage, depth-tested.
-    pub albedo_is_opaque_picture: bool,
+    /// The premultiplied texture's coverage is the surface's silhouette (a cutout): what it covers
+    /// is drawn opaque — un-premultiplied colour, full coverage, depth-tested.
+    pub albedo_is_cutout: bool,
     /// The vertex field (`program_field`) is evaluated at the vertex's texcoord (x, y, 0) instead of
-    /// its position: a stroked path stores the centreline point there, so both sides of a line move
-    /// together and the line keeps its width under the field.
-    pub field_anchor: bool,
+    /// its position, e.g. a stroke whose texcoord is its centreline point keeps its width under the
+    /// field.
+    pub field_at_texcoord: bool,
     /// Coverage comes from these curves, evaluated per fragment, instead of the triangles' edges:
     /// the triangles only need to cover the curves' bounds. Exact at any magnification.
     pub curves: Option<std::sync::Arc<CurveFill>>,
@@ -300,7 +300,7 @@ pub(crate) mod gpu_data {
     pub struct MaterialUniformBuffer {
         albedo_factor: ecolor::Rgba,
         texture_format: wgpu_buffer_types::U32RowPadded,
-        field_anchor: wgpu_buffer_types::U32RowPadded,
+        field_at_texcoord: wgpu_buffer_types::U32RowPadded,
         curve_count: wgpu_buffer_types::U32RowPadded,
         even_odd: wgpu_buffer_types::U32RowPadded,
         gradient_kind: wgpu_buffer_types::U32RowPadded,
@@ -310,12 +310,12 @@ pub(crate) mod gpu_data {
     }
 
     impl MaterialUniformBuffer {
-        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat, field_anchor: bool, curves: Option<&super::CurveFill>) -> Self {
+        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat, field_at_texcoord: bool, curves: Option<&super::CurveFill>) -> Self {
             let gradient = curves.and_then(|fill| fill.gradient.as_ref());
             Self {
                 albedo_factor,
                 texture_format: (texture_format as u32).into(),
-                field_anchor: u32::from(field_anchor).into(),
+                field_at_texcoord: u32::from(field_at_texcoord).into(),
                 curve_count: curves.map_or(0, |fill| fill.curves.len() as u32).into(),
                 even_odd: u32::from(curves.is_some_and(|fill| fill.even_odd)).into(),
                 gradient_kind: gradient.map_or(0, |g| g.kind as u32).into(),
@@ -416,7 +416,7 @@ impl GpuMesh {
                         material.albedo_factor,
                         if material.curves.is_some() {
                             gpu_data::TextureFormat::Curves
-                        } else if material.albedo_is_premultiplied && material.albedo_is_opaque_picture {
+                        } else if material.albedo_is_premultiplied && material.albedo_is_cutout {
                             gpu_data::TextureFormat::OpaquePremultipliedRgba
                         } else if material.albedo_is_premultiplied {
                             gpu_data::TextureFormat::PremultipliedRgba
@@ -425,7 +425,7 @@ impl GpuMesh {
                         } else {
                             gpu_data::TextureFormat::Rgba
                         },
-                        material.field_anchor,
+                        material.field_at_texcoord,
                         material.curves.as_deref(),
                     )
                 }),
@@ -472,7 +472,7 @@ impl GpuMesh {
 
                 // TODO(#12223): handle texture transparency
                 let is_transparent = material.curves.is_some()
-                    || (material.albedo_is_premultiplied && !material.albedo_is_opaque_picture)
+                    || (material.albedo_is_premultiplied && !material.albedo_is_cutout)
                     || material.albedo_factor.a() < 1.0
                     || data.vertex_colors.iter().any(|color| color.0[3] < 255);
 

@@ -265,8 +265,8 @@ fn import_mesh(
 
         materials.push(Material {
             albedo_is_premultiplied: false,
-            albedo_is_opaque_picture: false,
-            field_anchor: false,
+            albedo_is_cutout: false,
+            field_at_texcoord: false,
             curves: None,
             label: primitive.material().name().into(),
             index_range: index_offset..triangle_indices.len() as u32 * 3,

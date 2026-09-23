@@ -88,7 +88,7 @@ struct UniformBuffer {
     surface_thickness: f32,
 
     /// Cells per side of the grid the vertex stage moves with the field.
-    field_grid: f32,
+    subdivisions: f32,
 };
 
 @group(1) @binding(0)

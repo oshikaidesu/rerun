@@ -738,8 +738,8 @@ fn materials_for_uncolored_mesh(
             .clone(),
         albedo_factor: re_renderer::Rgba::BLACK,
         albedo_is_premultiplied: false,
-        albedo_is_opaque_picture: false,
-        field_anchor: false,
+        albedo_is_cutout: false,
+        field_at_texcoord: false,
         curves: None,
     }]
 }

@@ -6,10 +6,10 @@
 ///
 /// The picture is a grid of `field_grid²` cells (TriangleList, 6 vertices per cell) so the field can
 /// move it the way it moves a mesh vertex: forward, in the instance frame. That is what lets the
-/// silhouette leave the rectangle. `field_grid <= 1` degenerates to the plain two triangles.
+/// silhouette leave the rectangle. `subdivisions <= 1` degenerates to the plain two triangles.
 @vertex
 fn vs_main(@builtin(vertex_index) v_idx: u32) -> VertexOut {
-    let n = max(u32(rect_info.field_grid), 1u);
+    let n = max(u32(rect_info.subdivisions), 1u);
     let cell = v_idx / 6u;
     var corner = array<vec2f, 6>(
         vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0),

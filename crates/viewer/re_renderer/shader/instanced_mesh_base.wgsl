@@ -25,7 +25,7 @@ const FORMAT_RGBA: u32 = 0;
 const FORMAT_GRAYSCALE: u32 = 1;
 const FORMAT_PREMULTIPLIED_RGBA: u32 = 2;
 const FORMAT_CURVES: u32 = 3;
-const FORMAT_OPAQUE_PREMULTIPLIED_RGBA: u32 = 4;
+const FORMAT_CUTOUT_PREMULTIPLIED_RGBA: u32 = 4;
 
 // Keep in sync with `gpu_data::MaterialUniformBuffer` in mesh.rs
 struct MaterialUniformBuffer {
@@ -33,7 +33,7 @@ struct MaterialUniformBuffer {
     // Each u32 sits on its own 16-byte row (`U32RowPadded` in mesh.rs): read `.x`.
     texture_format: vec4u,
     // 1: evaluate the vertex field at texcoord (x, y, 0) — stroked paths keep their centreline there.
-    field_anchor: vec4u,
+    field_at_texcoord: vec4u,
     // FORMAT_CURVES: number of quadratic curves in `curves`, and the fill rule (1 = even-odd).
     curve_count: vec4u,
     even_odd: vec4u,
@@ -226,7 +226,7 @@ fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
     // Where the field is sampled: the vertex, or its anchor (a stroke's centreline point) so a line's
     // two sides move together and the width survives.
     var sample = in_vertex.position;
-    if material.field_anchor.x != 0u {
+    if material.field_at_texcoord.x != 0u {
         sample = vec3f(in_vertex.texcoord, 0.0);
     }
     let frame_sample = vec3f(
@@ -282,7 +282,7 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         case FORMAT_PREMULTIPLIED_RGBA: { texture = sample.rgb; texture_coverage = sample.a; }
         // An opaque volume: the geometry is the outline, so the picture's alpha is only filtering at
         // its edge. Un-premultiply the filtered colour and cover fully.
-        case FORMAT_OPAQUE_PREMULTIPLIED_RGBA: { texture = select(vec3f(0.0), sample.rgb / sample.a, sample.a > 0.0); }
+        case FORMAT_CUTOUT_PREMULTIPLIED_RGBA: { texture = select(vec3f(0.0), sample.rgb / sample.a, sample.a > 0.0); }
         case FORMAT_CURVES: {
             var paint = vec4f(1.0);
             if material.gradient_kind.x != 0u { paint = gradient_paint(in.texcoord); }

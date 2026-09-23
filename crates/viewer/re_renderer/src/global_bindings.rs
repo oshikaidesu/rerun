@@ -183,6 +183,7 @@ impl GlobalBindings {
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
+                        // Captured view of the scene.
                         wgpu::BindGroupLayoutEntry {
                             binding: 9,
                             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -193,7 +194,7 @@ impl GlobalBindings {
                             },
                             count: None,
                         },
-                        // Light cookie: the blockers seen from the sun.
+                        // Coverage picture projected onto the world.
                         wgpu::BindGroupLayoutEntry {
                             binding: 10,
                             visibility: wgpu::ShaderStages::FRAGMENT,

@@ -48,8 +48,8 @@ pub fn load_stl_from_buffer(
 
     let material = mesh::Material {
         albedo_is_premultiplied: false,
-        albedo_is_opaque_picture: false,
-        field_anchor: false,
+        albedo_is_cutout: false,
+        field_at_texcoord: false,
         curves: None,
         label: name.clone(),
         index_range: 0..num_vertices as u32,
