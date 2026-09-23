@@ -215,7 +215,7 @@ impl GpuBindGroupPool {
         _buffers: &mut GpuBufferPool,
         _samplers: &mut GpuSamplerPool,
     ) {
-        self.pool.begin_frame(frame_index, |_res| {});
+        self.pool.begin_frame(frame_index, |_handle, _res| {});
     }
 
     pub fn num_resources(&self) -> usize {

@@ -104,6 +104,8 @@ pub(crate) fn build_band_draw_data(
             outline_mask_ids: re_renderer::OutlineMaskPreference::NONE,
             picking_layer_id: re_renderer::PickingLayerId::default(),
             cull_mode: None,
+            program: None,
+            params: [0.0; 24],
         });
     }
 

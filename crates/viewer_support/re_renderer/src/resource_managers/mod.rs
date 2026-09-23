@@ -8,10 +8,12 @@
 
 mod frame_retained_cache;
 mod image_data_to_texture;
+mod mipmap;
 mod texture_3d;
 mod texture_manager;
 mod yuv_converter;
 
+pub use self::mipmap::MipmapGenerator;
 pub use image_data_to_texture::{
     ImageDataDesc, ImageDataToTextureError, SourceImageDataFormat, transfer_image_data_to_texture,
 };

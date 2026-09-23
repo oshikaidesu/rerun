@@ -1,0 +1,365 @@
+#import <./types.wgsl>
+#import <./global_bindings.wgsl>
+#import <./mesh_vertex.wgsl>
+#import <./utils/srgb.wgsl>
+#import <./utils/lighting.wgsl>
+#import <./utils/clip.wgsl>
+
+// This file is never compiled alone: a `SurfaceProgram` appends the hooks below (defaults or the
+// embedder's own) and compiles the result. See mesh_program.rs.
+//
+//   fn program_field(in: FieldIn) -> FieldOut                   moves a vertex in the instance frame
+//   fn program_motion(slot: f32, world_position: vec3f) -> vec3f moves a placed vertex in the world
+//   fn program_tint(slot: f32) -> vec4f                          multiplies a fragment (premultiplied)
+//   fn program_surface(in: SurfaceIn) -> vec3f                   radiance leaving a shaded fragment
+
+#import <./utils/field.wgsl>
+
+#import <./surface.wgsl>
+
+@group(1) @binding(0)
+var albedo_texture: texture_2d<f32>;
+
+// Keep in sync with `gpu_data::TextureFormat` in mesh.rs
+const FORMAT_RGBA: u32 = 0;
+const FORMAT_GRAYSCALE: u32 = 1;
+const FORMAT_PREMULTIPLIED_RGBA: u32 = 2;
+const FORMAT_CURVES: u32 = 3;
+const FORMAT_CUTOUT_PREMULTIPLIED_RGBA: u32 = 4;
+
+// Keep in sync with `gpu_data::MaterialUniformBuffer` in mesh.rs
+struct MaterialUniformBuffer {
+    albedo_factor: vec4f,
+    // Each u32 sits on its own 16-byte row (`U32RowPadded` in mesh.rs): read `.x`.
+    texture_format: vec4u,
+    // 1: evaluate the vertex field at texcoord (x, y, 0) — stroked paths keep their centreline there.
+    field_at_texcoord: vec4u,
+    // FORMAT_CURVES: number of quadratic curves in `curves`, and the fill rule (1 = even-odd).
+    curve_count: vec4u,
+    even_odd: vec4u,
+    // 0: vertex colour. Otherwise the albedo texture is a ramp over t = 0..=1 along `gradient_line`
+    // (start.xy, end.xy in texcoord units).
+    gradient_kind: vec4u,
+    gradient_line: vec4f,
+    // The gradient's space in texcoord units: origin.xy, scale.zw.
+    gradient_space: vec4f,
+};
+
+const GRADIENT_LINEAR: u32 = 1;
+const GRADIENT_RADIAL: u32 = 2;
+const GRADIENT_ANGULAR: u32 = 3;
+const GRADIENT_DIAMOND: u32 = 4;
+const TAU: f32 = 6.283185307179586;
+
+fn gradient_parameter(at: vec2f) -> f32 {
+    let p = (at - material.gradient_space.xy) / material.gradient_space.zw;
+    let start = material.gradient_line.xy;
+    let d = material.gradient_line.zw - start;
+    let len2 = dot(d, d);
+    if len2 <= 0.0 { return 0.0; }
+    let v = p - start;
+    var t = 0.0;
+    switch material.gradient_kind.x {
+        case GRADIENT_LINEAR: { t = dot(v, d) / len2; }
+        case GRADIENT_RADIAL: { t = sqrt(dot(v, v) / len2); }
+        case GRADIENT_ANGULAR: { let turn = (atan2(v.y, v.x) - atan2(d.y, d.x)) / TAU; t = turn - floor(turn); }
+        case GRADIENT_DIAMOND: {
+            let len = sqrt(len2);
+            t = (abs(dot(v, d) / len) + abs((v.y * d.x - v.x * d.y) / len)) / len;
+        }
+        default: {}
+    }
+    return clamp(t, 0.0, 1.0);
+}
+
+// Straight colour of the ramp at t, interpolated between its texels.
+fn gradient_paint(p: vec2f) -> vec4f {
+    let n = textureDimensions(albedo_texture).x;
+    let x = gradient_parameter(p) * f32(n - 1u);
+    let i = min(u32(floor(x)), n - 1u);
+    let a = textureLoad(albedo_texture, vec2u(i, 0u), 0);
+    let b = textureLoad(albedo_texture, vec2u(min(i + 1u, n - 1u), 0u), 0);
+    let c = mix(a, b, x - floor(x));
+    return vec4f(linear_from_srgb(c.rgb), c.a);
+}
+
+@group(1) @binding(1)
+var<uniform> material: MaterialUniformBuffer;
+
+// Quadratic outlines in texcoord units, two texels per curve: (p0, p1), (p2, _). A data texture.
+@group(1) @binding(2)
+var curves_texture: texture_2d<f32>;
+
+fn curve_texel(i: u32) -> vec4f {
+    let width = textureDimensions(curves_texture).x;
+    return textureLoad(curves_texture, vec2u(i % width, i / width), 0);
+}
+
+// Signed, antialiased crossing of one quadratic with the ray from the origin towards +x.
+// Lengyel, "GPU-Centered Font Rendering Directly from Glyph Outlines" (JCGT 2017): the sign
+// pattern of the control points' y decides which roots count, so shared endpoints never double count.
+fn curve_ray_coverage(p1: vec2f, p2: vec2f, p3: vec2f, pixels_per_unit: f32) -> f32 {
+    let shift = select(0u, 2u, p1.y > 0.0) + select(0u, 4u, p2.y > 0.0) + select(0u, 8u, p3.y > 0.0);
+    let code = (0x2E74u >> shift) & 3u;
+    if code == 0u {
+        return 0.0;
+    }
+    let a = p1 - 2.0 * p2 + p3;
+    let b = p1 - p2;
+    var t1: f32;
+    var t2: f32;
+    if abs(a.y) < 1e-6 {
+        t1 = p1.y / (2.0 * b.y);
+        t2 = t1;
+    } else {
+        let d = sqrt(max(b.y * b.y - a.y * p1.y, 0.0));
+        t1 = (b.y - d) / a.y;
+        t2 = (b.y + d) / a.y;
+    }
+    let x1 = (a.x * t1 - 2.0 * b.x) * t1 + p1.x;
+    let x2 = (a.x * t2 - 2.0 * b.x) * t2 + p1.x;
+    var coverage = 0.0;
+    if (code & 1u) != 0u {
+        coverage += clamp(x1 * pixels_per_unit + 0.5, 0.0, 1.0);
+    }
+    if code > 1u {
+        coverage -= clamp(x2 * pixels_per_unit + 0.5, 0.0, 1.0);
+    }
+    return coverage;
+}
+
+fn winding_coverage(winding: f32) -> f32 {
+    if material.even_odd.x != 0u {
+        return clamp(abs(winding - 2.0 * round(winding * 0.5)), 0.0, 1.0);
+    }
+    return clamp(abs(winding), 0.0, 1.0);
+}
+
+// Coverage of the curve fill at `p`, antialiased over one pixel (`texel` = fwidth of the texcoord).
+// Rays along x and y are averaged, so edges in both directions are smooth.
+fn curve_coverage(p: vec2f, texel: vec2f) -> f32 {
+    let pixels_per_unit = 1.0 / max(texel, vec2f(1e-12));
+    var along_x = 0.0;
+    var along_y = 0.0;
+    for (var i = 0u; i < material.curve_count.x; i++) {
+        let a = curve_texel(2u * i);
+        let b = curve_texel(2u * i + 1u);
+        let p1 = a.xy - p;
+        let p2 = a.zw - p;
+        let p3 = b.xy - p;
+        along_x += curve_ray_coverage(p1, p2, p3, pixels_per_unit.x);
+        along_y += curve_ray_coverage(p1.yx, p2.yx, p3.yx, pixels_per_unit.y);
+    }
+    return 0.5 * (winding_coverage(along_x) + winding_coverage(along_y));
+}
+
+// Keep in sync with `clip_gpu_data::ClipUniformBuffer` in mesh_renderer.rs
+struct ClipUniformBuffer {
+    plane: vec4f,
+    cap: u32,
+};
+
+@group(2) @binding(0)
+var<uniform> clip: ClipUniformBuffer;
+
+struct VertexOut {
+    // Invariant: the depth pre-pass and the shading pass must place every sample identically.
+    @builtin(position) @invariant
+    position: vec4f,
+
+    @location(0) @interpolate(perspective, sample)
+    color: vec4f, // 0-1 linear space with unmultiplied/separate alpha
+
+    @location(1) @interpolate(perspective, center)
+    texcoord: vec2f,
+
+    @location(2) @interpolate(perspective, sample)
+    normal_world_space: vec3f,
+
+    @location(3) @interpolate(flat)
+    additive_tint_rgba: vec4f, // 0-1 linear space with unmultiplied/separate alpha
+
+    @location(4) @interpolate(flat)
+    outline_mask_ids: vec2u,
+
+    @location(5) @interpolate(flat)
+    picking_layer_id: vec4u,
+
+    // xyz = world position, w = slab thickness (flat per instance; 15 inter-stage variables is the cap).
+    @location(6) @interpolate(perspective, sample)
+    world_position: vec4f,
+
+    @location(7) @interpolate(flat)
+    params0: vec4f,
+    @location(8) @interpolate(flat)
+    params1: vec4f,
+    @location(9) @interpolate(flat)
+    params2: vec4f,
+    @location(10) @interpolate(flat)
+    params3: vec4f,
+    @location(11) @interpolate(flat)
+    params4: vec4f,
+    @location(12) @interpolate(flat)
+    params5: vec4f,
+    @location(13) @interpolate(perspective, center)
+    footprint_normal: vec3f,
+    @location(14) @interpolate(perspective, center)
+    footprint_position: vec3f,
+};
+
+@vertex
+fn vs_main(in_vertex: VertexIn, in_instance: InstanceIn) -> VertexOut {
+    // Instance frame: rotation and scale of world_from_mesh, no translation. The field travels with the mesh.
+    let frame_position = vec3f(
+        dot(in_instance.world_from_mesh_row_0.xyz, in_vertex.position),
+        dot(in_instance.world_from_mesh_row_1.xyz, in_vertex.position),
+        dot(in_instance.world_from_mesh_row_2.xyz, in_vertex.position),
+    );
+    let translation = vec3f(in_instance.world_from_mesh_row_0.w, in_instance.world_from_mesh_row_1.w, in_instance.world_from_mesh_row_2.w);
+    // Normal transform = transpose(inverse(M)) = cofactor(M) / det(M); zero for a degenerate M.
+    let col0 = vec3f(in_instance.world_from_mesh_row_0.x, in_instance.world_from_mesh_row_1.x, in_instance.world_from_mesh_row_2.x);
+    let col1 = vec3f(in_instance.world_from_mesh_row_0.y, in_instance.world_from_mesh_row_1.y, in_instance.world_from_mesh_row_2.y);
+    let col2 = vec3f(in_instance.world_from_mesh_row_0.z, in_instance.world_from_mesh_row_1.z, in_instance.world_from_mesh_row_2.z);
+    let det = dot(col0, cross(col1, col2));
+    var world_normal = vec3f(0.0);
+    if det != 0.0 {
+        world_normal = (cross(col1, col2) * in_vertex.normal.x + cross(col2, col0) * in_vertex.normal.y + cross(col0, col1) * in_vertex.normal.z) / det;
+    }
+    let placed_position = frame_position + translation;
+    var world_position = placed_position + program_motion(in_instance.params5.w, placed_position);
+    let params = array<vec4f, 6>(in_instance.params0, in_instance.params1, in_instance.params2, in_instance.params3, in_instance.params4, in_instance.params5);
+    // Where the field is sampled: the vertex, or its anchor (a stroke's centreline point) so a line's
+    // two sides move together and the width survives.
+    var sample = in_vertex.position;
+    if material.field_at_texcoord.x != 0u {
+        sample = vec3f(in_vertex.texcoord, 0.0);
+    }
+    let frame_sample = vec3f(
+        dot(in_instance.world_from_mesh_row_0.xyz, sample),
+        dot(in_instance.world_from_mesh_row_1.xyz, sample),
+        dot(in_instance.world_from_mesh_row_2.xyz, sample),
+    );
+    let field = program_field(FieldIn(frame_sample, world_normal, params));
+    world_position += field.offset;
+    world_normal = field.normal;
+
+    var out: VertexOut;
+    out.position = frame.projection_from_world * vec4f(world_position, 1.0);
+    out.color = vec4f(linear_from_srgb(in_vertex.color.rgb), in_vertex.color.a);
+    out.texcoord = in_vertex.texcoord;
+    out.normal_world_space = world_normal;
+    // Instance encoded is with pre-multiplied alpha in sRGB.
+    out.additive_tint_rgba = vec4f(linear_from_srgb(in_instance.additive_tint_srgba.rgb / in_instance.additive_tint_srgba.a),
+                                    in_instance.additive_tint_srgba.a);
+    out.outline_mask_ids = in_instance.outline_mask_ids;
+    out.picking_layer_id = in_instance.picking_layer_id;
+    out.world_position = vec4f(world_position, length(in_instance.world_from_mesh_row_0.xyz));
+    out.params0 = in_instance.params0;
+    out.params1 = in_instance.params1;
+    out.params2 = in_instance.params2;
+    out.params3 = in_instance.params3;
+    out.params4 = in_instance.params4;
+    out.params5 = in_instance.params5;
+    out.footprint_normal = out.normal_world_space;
+    out.footprint_position = world_position;
+
+    return out;
+}
+
+@fragment
+fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
+    let texel = fwidth(in.texcoord);
+    if FILTER_SURFACE_FOOTPRINT {
+        var n = in.footprint_normal / max(length(in.footprint_normal), 1e-20);
+        let back = dot(n,view_direction_to_camera(in.footprint_position)) < 0.0;
+        if clip.cap == 1u && back && dot(clip.plane.xyz,clip.plane.xyz) > 0.0 { n = normalize(clip.plane.xyz); }
+        prepare_surface_footprint(in.footprint_position,n);
+    }
+    if clip_outside(clip.plane, in.world_position.xyz) {
+        discard;
+    }
+    let sample = textureSample(albedo_texture, trilinear_sampler_repeat, in.texcoord);
+    var texture: vec3f;
+    var texture_coverage = 1.0;
+    switch material.texture_format.x {
+        case FORMAT_RGBA: { texture = linear_from_srgb(sample.rgb); }
+        case FORMAT_GRAYSCALE: { texture = linear_from_srgb(sample.rrr); }
+        case FORMAT_PREMULTIPLIED_RGBA: { texture = sample.rgb; texture_coverage = sample.a; }
+        // An opaque volume: the geometry is the outline, so the picture's alpha is only filtering at
+        // its edge. Un-premultiply the filtered colour and cover fully.
+        case FORMAT_CUTOUT_PREMULTIPLIED_RGBA: { texture = select(vec3f(0.0), sample.rgb / sample.a, sample.a > 0.0); }
+        case FORMAT_CURVES: {
+            var paint = vec4f(1.0);
+            if material.gradient_kind.x != 0u { paint = gradient_paint(in.texcoord); }
+            texture_coverage = curve_coverage(in.texcoord, texel) * paint.a;
+            texture = paint.rgb * texture_coverage;
+        }
+        default: { texture = vec3f(0.0); }
+    }
+
+    // Vertex paint participates in the material transparency classification on the CPU.
+    // Texture alpha remains subject to the separate texture-transparency contract.
+    var albedo = vec4f(texture * in.color.rgb, texture_coverage) * material.albedo_factor;
+    albedo *= in.color.a;
+
+    // The additive tint linear space with unmultiplied/separate (!!) alpha.
+    albedo += vec4f(in.additive_tint_rgba.rgb, 0.0);
+    albedo *= in.additive_tint_rgba.a;
+    let tint = program_tint(in.params5.w);
+    albedo = vec4f(albedo.rgb * tint.rgb, albedo.a) * tint.a;
+    albedo *= near_fade(in.world_position.xyz);
+
+    if all(in.normal_world_space == vec3f(0.0, 0.0, 0.0)) {
+        // no normal, no shading
+        return albedo;
+    }
+    let view_dir = view_direction_to_camera(in.world_position.xyz);
+    var normal = normalize(in.normal_world_space);
+    let back_side = dot(normal, view_dir) < 0.0;
+    if back_side {
+        normal = -normal; // two-sided
+    }
+    // Inside faces seen through the cut (their normal points away from the viewer) read as a flat cap:
+    // shade them with the plane's normal. Winding is not used: meshes are drawn two-sided.
+    if clip.cap == 1u && back_side && dot(clip.plane.xyz, clip.plane.xyz) > 0.0 {
+        normal = normalize(clip.plane.xyz);
+    }
+    let params = array<vec4f, 6>(in.params0, in.params1, in.params2, in.params3, in.params4, in.params5);
+    let coverage = albedo.a;
+    if coverage <= 0.0 {
+        return vec4f(0.0);
+    }
+    let radiance = program_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position.xyz, in.world_position.w, params, in.texcoord, coverage));
+    return vec4f(radiance * coverage, coverage);
+}
+
+/// Depth pre-pass: the same fragments survive as in `fs_main_shaded` (only the clip plane discards
+/// there), so the shading pass at equal depth evaluates the material once per sample.
+@fragment
+fn fs_main_depth_only(in: VertexOut) -> @location(0) vec4f {
+    if clip_outside(clip.plane, in.world_position.xyz) {
+        discard;
+    }
+    return vec4f(0.0);
+}
+
+@fragment
+fn fs_main_picking_layer(in: VertexOut) -> @location(0) vec4u {
+    let texel = fwidth(in.texcoord);
+    if in.color.a <= 0.0 { discard; }
+    if material.texture_format.x == FORMAT_CURVES && curve_coverage(in.texcoord, texel) < 0.5 { discard; }
+    if material.texture_format.x == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
+    if clip_outside(clip.plane, in.world_position.xyz) {
+        discard;
+    }
+    return in.picking_layer_id;
+}
+
+@fragment
+fn fs_main_outline_mask(in: VertexOut) -> @location(0) vec2u {
+    let texel = fwidth(in.texcoord);
+    if in.color.a <= 0.0 || clip_outside(clip.plane, in.world_position.xyz) { discard; }
+    if material.texture_format.x == FORMAT_CURVES && curve_coverage(in.texcoord, texel) < 0.5 { discard; }
+    if material.texture_format.x == FORMAT_PREMULTIPLIED_RGBA && textureSampleLevel(albedo_texture, trilinear_sampler_repeat, in.texcoord, 0.0).a <= 0.0 { discard; }
+    return in.outline_mask_ids;
+}

@@ -289,6 +289,10 @@ fn import_mesh(
         };
 
         materials.push(Material {
+            albedo_is_premultiplied: false,
+            albedo_is_cutout: false,
+            field_at_texcoord: false,
+            curves: None,
             label: primitive.material().name().into(),
             index_range: re_span::Span::from_start_end(
                 index_offset,

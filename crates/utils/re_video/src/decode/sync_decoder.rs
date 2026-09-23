@@ -15,4 +15,15 @@ pub trait SyncDecoder {
 
     /// Clear and reset everything
     fn reset(&mut self, video_data_description: &VideoDataDescription);
+
+    /// See [`crate::decode::AsyncDecoder::min_num_samples_to_enqueue_ahead`].
+    fn min_num_samples_to_enqueue_ahead(&self) -> usize {
+        0
+    }
+
+    /// See [`crate::decode::AsyncDecoder::end_of_video`]: flush what the decoder still holds.
+    fn end_of_video(&mut self, _output_sender: &Sender<FrameResult>) {}
+
+    /// See [`crate::decode::AsyncDecoder::set_hurry`].
+    fn set_hurry(&mut self, _hurry: bool) {}
 }

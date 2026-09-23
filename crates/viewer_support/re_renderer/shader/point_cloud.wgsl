@@ -1,5 +1,6 @@
 #import <./global_bindings.wgsl>
 #import <./types.wgsl>
+#import <./utils/clip.wgsl>
 #import <./utils/camera.wgsl>
 #import <./utils/flags.wgsl>
 #import <./utils/size.wgsl>
@@ -34,6 +35,7 @@ struct BatchUniformBuffer {
     _padding: u32,
     outline_mask: vec2u,
     picking_layer_object_id: vec2u,
+    clip_plane: vec4f,
 };
 @group(2) @binding(0)
 var<uniform> batch: BatchUniformBuffer;
@@ -161,6 +163,9 @@ fn coverage(world_position: vec3f, radius: f32, point_center: vec3f, quad_offset
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4f {
+    if clip_outside(batch.clip_plane, in.point_center) {
+        discard;
+    }
     var coverage = coverage(
         in.world_position,
         in.radius,
@@ -171,6 +176,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     if frame.deterministic_rendering == 1 {
         coverage = step(0.5, coverage);
     }
+    coverage *= near_fade(in.world_position);
 
     // As per benchmarking on Apple Silicon M5, putting a discard can be
     // a significant pessimization in high-overdraw situations and at best only a very mild optimization.

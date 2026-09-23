@@ -164,6 +164,9 @@ pub struct TextureManager2D {
     /// Caches textures using a unique id, which in practice is the hash of the
     /// row id of the tensor data (`tensor_data_row_id`).
     texture_cache: FrameRetainedCache<u64, GpuTexture2D>,
+
+    /// Draws the mip chain for [`TextureManager2D::create_with_mipmaps`]. Built on first use.
+    mipmaps: re_mutex::Mutex<Option<super::MipmapGenerator>>,
 }
 
 impl TextureManager2D {
@@ -228,6 +231,7 @@ impl TextureManager2D {
             zeroed_texture_sint,
             zeroed_texture_uint,
             texture_cache: Default::default(),
+            mipmaps: Default::default(),
         }
     }
 
@@ -262,6 +266,68 @@ impl TextureManager2D {
         )?;
         transfer_image_data_to_texture(render_ctx, creation_desc, &texture)?;
         Ok(GpuTexture2D::new(texture, alpha_channel_usage).expect("Texture is known to be 2D"))
+    }
+
+    /// Like [`Self::create`], but allocates the full mip chain and draws it on the GPU right
+    /// after the upload (same frame encoder, so ordering holds). Level 0 is the image data.
+    pub fn create_with_mipmaps(
+        &self,
+        render_ctx: &RenderContext,
+        creation_desc: ImageDataDesc<'_>,
+    ) -> Result<GpuTexture2D, ImageDataToTextureError> {
+        let alpha_channel_usage = creation_desc.alpha_channel_usage;
+        let [width, height] = creation_desc.width_height;
+        let texture = render_ctx.gpu_resources.textures.alloc(
+            &render_ctx.device,
+            &TextureDesc {
+                label: creation_desc.label.clone(),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: super::MipmapGenerator::mip_level_count(width, height),
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: creation_desc.target_texture_format(),
+                usage: creation_desc.target_texture_usage_requirements()
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            },
+        );
+        transfer_image_data_to_texture(render_ctx, creation_desc, &texture)?;
+        let mut mipmaps = self.mipmaps.lock();
+        let generator =
+            mipmaps.get_or_insert_with(|| super::MipmapGenerator::new(&render_ctx.device));
+        let mut encoder = render_ctx.active_frame.before_view_builder_encoder.lock();
+        generator.generate(&render_ctx.device, encoder.get(), &texture.texture);
+        Ok(GpuTexture2D::new(texture, alpha_channel_usage).expect("Texture is known to be 2D"))
+    }
+
+    /// Draws the mip chain of an already filled level 0 into `encoder`. The texture needs
+    /// `RENDER_ATTACHMENT | TEXTURE_BINDING` and its levels allocated (see `MipmapGenerator`).
+    pub fn generate_mipmaps(
+        &self,
+        render_ctx: &RenderContext,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+    ) {
+        self.generate_mipmap_levels(render_ctx, encoder, texture, texture.mip_level_count());
+    }
+
+    /// Generates only the first `levels` levels (base included); see `MipmapGenerator::generate_levels`.
+    pub fn generate_mipmap_levels(
+        &self,
+        render_ctx: &RenderContext,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        levels: u32,
+    ) {
+        let mut mipmaps = self.mipmaps.lock();
+        let generator =
+            mipmaps.get_or_insert_with(|| super::MipmapGenerator::new(&render_ctx.device));
+        generator.generate_levels(&render_ctx.device, encoder, texture, levels);
     }
 
     /// Creates a new 2D texture resource and schedules data upload to the GPU if a texture

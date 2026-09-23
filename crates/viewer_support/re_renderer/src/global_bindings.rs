@@ -4,7 +4,7 @@ use smallvec::smallvec;
 use crate::wgpu_buffer_types;
 use crate::wgpu_resources::{
     BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
-    GpuSamplerHandle, SamplerDesc, WgpuResourcePools,
+    GpuSamplerHandle, GpuTextureHandle, SamplerDesc, WgpuResourcePools,
 };
 
 /// Mirrors the GPU contents of a frame-global uniform buffer.
@@ -51,6 +51,25 @@ pub struct FrameUniformBuffer {
     ///
     /// Zero for orthographic projection.
     pub focal_length_in_pixels: glam::Vec2,
+
+    /// Multiplier on the environment maps (bindings 4 & 5).
+    pub environment_strength: f32,
+
+    /// boolean (0/1): whether an environment is bound; otherwise lighting falls back to fixed lights.
+    pub environment_present: u32,
+
+    /// Number of entries in the view's motion data texture.
+    pub motion_len: u32,
+    pub _padding_environment: u32,
+
+    /// Rotation applied to world directions before the equirectangular lookup.
+    pub environment_from_world: wgpu_buffer_types::Mat3,
+
+    /// Constants the view's surface programs read (`TargetConfiguration::program_constants`).
+    pub program_constants: [wgpu_buffer_types::Vec4; 10],
+    /// x: camera-forward depth below which world geometry starts to fade (0 = never); it is gone at x / 3.
+    pub near_fade: wgpu_buffer_types::Vec4,
+    pub _end_padding: [wgpu_buffer_types::PaddingRow; 1],
 }
 
 /// Global bindings which are always available on bind group 0 for all [`crate::renderer::Renderer`].
@@ -59,6 +78,24 @@ pub struct GlobalBindings {
     nearest_neighbor_sampler_repeat: GpuSamplerHandle,
     nearest_neighbor_sampler_clamped: GpuSamplerHandle,
     trilinear_sampler_repeat: GpuSamplerHandle,
+    equirect_sampler: GpuSamplerHandle,
+    screen_sampler: GpuSamplerHandle,
+}
+
+/// Textures bound in group 0 for the environment (see [`crate::Environment`]).
+#[derive(Clone, Copy)]
+pub struct EnvironmentBindings {
+    pub radiance: GpuTextureHandle,
+    pub irradiance: GpuTextureHandle,
+    /// Screen-space picture already composited beneath this view's surfaces (premultiplied, with a
+    /// mip chain). Zero texture when there is none.
+    pub backdrop: GpuTextureHandle,
+    /// See [`crate::view_builder::TargetConfiguration::view_capture`]. Zero texture when there is none.
+    pub view_capture: GpuTextureHandle,
+    /// See [`crate::view_builder::TargetConfiguration::coverage`]. Zero texture when there is none.
+    pub coverage: GpuTextureHandle,
+    /// See [`crate::view_builder::TargetConfiguration::motion`].
+    pub motion: GpuTextureHandle,
 }
 
 impl GlobalBindings {
@@ -106,6 +143,86 @@ impl GlobalBindings {
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
+                        // Environment radiance (equirectangular).
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // Environment irradiance (equirectangular, cosine convolved).
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 5,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // Trilinear sampler for equirectangular maps: repeat u, clamp v.
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 6,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        // Backdrop: what is already drawn beneath this view's meshes (screen space).
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 7,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // Trilinear clamped sampler for screen-space lookups, whole mip chain open.
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 8,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        // Captured view of the scene.
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 9,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // Coverage picture projected onto the world.
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 10,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // Motion: per-object offsets computed on the GPU, read by vertex stages (place) and fragment stages (tint).
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 11,
+                            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
                     ],
                 },
             ),
@@ -142,6 +259,37 @@ impl GlobalBindings {
                     ..Default::default()
                 },
             ),
+            equirect_sampler: pools.samplers.get_or_create(
+                device,
+                &SamplerDesc {
+                    label: "GlobalBindings::equirect_sampler".into(),
+                    mag_filter: wgpu::FilterMode::Linear,
+                    min_filter: wgpu::FilterMode::Linear,
+                    mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                    // Longitude wraps, latitude clamps at the poles.
+                    address_mode_u: wgpu::AddressMode::Repeat,
+                    address_mode_v: wgpu::AddressMode::ClampToEdge,
+                    address_mode_w: wgpu::AddressMode::ClampToEdge,
+                    // `SamplerDesc::default()` clamps lod to 0, which silently pins every
+                    // `textureSampleLevel` to the base level; open the whole mip chain.
+                    lod_max_clamp: ordered_float::NotNan::new(32.0).expect("finite"),
+                    ..Default::default()
+                },
+            ),
+            screen_sampler: pools.samplers.get_or_create(
+                device,
+                &SamplerDesc {
+                    label: "GlobalBindings::screen_sampler".into(),
+                    mag_filter: wgpu::FilterMode::Linear,
+                    min_filter: wgpu::FilterMode::Linear,
+                    mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                    address_mode_u: wgpu::AddressMode::ClampToEdge,
+                    address_mode_v: wgpu::AddressMode::ClampToEdge,
+                    address_mode_w: wgpu::AddressMode::ClampToEdge,
+                    lod_max_clamp: ordered_float::NotNan::new(32.0).expect("finite"),
+                    ..Default::default()
+                },
+            ),
         }
     }
 
@@ -151,6 +299,7 @@ impl GlobalBindings {
         pools: &WgpuResourcePools,
         device: &wgpu::Device,
         frame_uniform_buffer_binding: BindGroupEntry,
+        environment: EnvironmentBindings,
     ) -> GpuBindGroup {
         pools.bind_groups.alloc(
             device,
@@ -163,6 +312,14 @@ impl GlobalBindings {
                     BindGroupEntry::Sampler(self.nearest_neighbor_sampler_repeat),
                     BindGroupEntry::Sampler(self.nearest_neighbor_sampler_clamped),
                     BindGroupEntry::Sampler(self.trilinear_sampler_repeat),
+                    BindGroupEntry::DefaultTextureView(environment.radiance),
+                    BindGroupEntry::DefaultTextureView(environment.irradiance),
+                    BindGroupEntry::Sampler(self.equirect_sampler),
+                    BindGroupEntry::DefaultTextureView(environment.backdrop),
+                    BindGroupEntry::Sampler(self.screen_sampler),
+                    BindGroupEntry::DefaultTextureView(environment.view_capture),
+                    BindGroupEntry::DefaultTextureView(environment.coverage),
+                    BindGroupEntry::DefaultTextureView(environment.motion),
                 ],
                 layout: self.layout,
             },

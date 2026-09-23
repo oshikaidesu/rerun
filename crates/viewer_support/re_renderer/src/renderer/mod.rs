@@ -4,7 +4,9 @@ mod depth_cloud;
 mod gaussian_splat;
 mod generic_skybox;
 mod lines;
+mod mesh_program;
 mod mesh_renderer;
+mod paths;
 mod plane_clustering;
 mod point_cloud;
 mod rectangles;
@@ -20,7 +22,16 @@ pub use gaussian_splat::{
 };
 pub use generic_skybox::{GenericSkyboxDrawData, GenericSkyboxType};
 pub use lines::{LineBatchInfo, LineDrawData, LineDrawDataError, LineStripFlags};
+pub use mesh_program::{
+    DEFAULT_FIELD, DEFAULT_MOTION, DEFAULT_RECTANGLE_SURFACE, DEFAULT_SURFACE, MeshProgram,
+    MeshProgramDesc, SurfaceProgram, SurfaceProgramDesc,
+    compose_source as compose_mesh_program_source,
+};
 pub use mesh_renderer::{GpuMeshInstance, MeshDrawData};
+pub use paths::{
+    PathContour, PathDrawData, PathDrawDataBuilder, PathFillRule, PathLineCap, PathLineJoin,
+    PathRenderer, PathStroke, PathVertex, fill_triangles, flattened_contours,
+};
 pub use point_cloud::{
     PointCloudBatchFlags, PointCloudBatchInfo, PointCloudDrawData, PointCloudDrawDataError,
 };
@@ -64,6 +75,18 @@ use crate::{
 /// [`DrawData`] specific payload that is injected into the otherwise type agnostic [`crate::Drawable`].
 pub type DrawDataDrawablePayload = u32;
 
+/// Caller-chosen ordering for one instance of a draw data (see [`DrawDataDrawable`]).
+///
+/// `position` replaces the point the distance sort measures from, and `secondary` replaces the
+/// tie-breaker: drawables that lie on one plane can share the plane's point and order by their
+/// stacking index instead of by where each sits on the plane.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DrawOrder {
+    pub layer: i32,
+    pub position: Option<glam::Vec3A>,
+    pub secondary: Option<f32>,
+}
+
 /// A single drawable item within a given [`DrawData`].
 ///
 /// The general expectation is that there's a rough one to one relationship between
@@ -85,6 +108,11 @@ pub struct DrawDataDrawable {
     /// drawables next to each other.
     pub secondary_sort_key: f32,
 
+    /// 2D layer index for the transparent phase, compared before [`Self::distance_sort_key`]:
+    /// lower layers are drawn first, so a higher layer stays on top wherever it sits on screen.
+    /// Everything that doesn't opt in shares layer 0 and keeps pure distance sorting.
+    pub layer_sort_key: i32,
+
     /// Key for identifying the drawable within the [`DrawData`] that produced it..
     ///
     /// This is effectively an arbitrary payload whose meaning is dependent on the drawable type
@@ -102,6 +130,7 @@ impl DrawDataDrawable {
         Self {
             distance_sort_key: world_position.distance_squared(view_info.camera_world_position),
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_payload,
         }
     }
@@ -109,6 +138,12 @@ impl DrawDataDrawable {
     #[inline]
     pub fn with_secondary_sort_key(mut self, secondary_sort_key: f32) -> Self {
         self.secondary_sort_key = secondary_sort_key;
+        self
+    }
+
+    #[inline]
+    pub fn with_layer_sort_key(mut self, layer_sort_key: i32) -> Self {
+        self.layer_sort_key = layer_sort_key;
         self
     }
 }
@@ -252,6 +287,7 @@ pub fn register_renderers(renderers: &mut crate::Renderers) {
     renderers.register::<generic_skybox::GenericSkybox>();
     renderers.register::<lines::LineRenderer>();
     renderers.register::<mesh_renderer::MeshRenderer>();
+    renderers.register::<paths::PathRenderer>();
     renderers.register::<point_cloud::PointCloudRenderer>();
     renderers.register::<rectangles::RectangleRenderer>();
     renderers.register::<test_triangle::TestTriangle>();

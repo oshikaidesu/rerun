@@ -120,7 +120,41 @@ fn all_wgsl_shaders_are_valid() {
             continue;
         }
 
-        let source = &interpolated.contents;
+        // A base shader of a surface program calls hooks the program appends (mesh_program.rs):
+        // validate it as it is compiled, with the renderer's default hooks.
+        let mut source = interpolated.contents.clone();
+        let rectangle = rel.to_string_lossy().contains("rectangle");
+        let surface = if rectangle {
+            re_renderer::renderer::DEFAULT_RECTANGLE_SURFACE
+        } else {
+            re_renderer::renderer::DEFAULT_SURFACE
+        };
+        let defaults = [
+            re_renderer::renderer::DEFAULT_FIELD,
+            re_renderer::renderer::DEFAULT_MOTION,
+            surface,
+        ];
+        for hook in [
+            "program_field",
+            "program_motion",
+            "program_tint",
+            "program_surface",
+        ] {
+            let defined = source
+                .lines()
+                .any(|line| line.starts_with(&format!("fn {hook}(")));
+            if source.contains(&format!("{hook}(")) && !defined {
+                let default = defaults
+                    .iter()
+                    .flat_map(|text| text.lines())
+                    .find(|line| line.starts_with(&format!("fn {hook}(")))
+                    .expect("every hook has a default");
+                source.push('\n');
+                source.push_str(default);
+                source.push('\n');
+            }
+        }
+        let source = &source;
 
         let module = match naga::front::wgsl::parse_str(source) {
             Ok(module) => module,

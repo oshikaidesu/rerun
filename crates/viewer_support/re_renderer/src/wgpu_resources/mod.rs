@@ -16,10 +16,18 @@ mod bind_group_pool;
 pub use bind_group_pool::{BindGroupDesc, BindGroupEntry, GpuBindGroup, GpuBindGroupPool};
 
 mod buffer_pool;
-pub use buffer_pool::{BufferDesc, GpuBuffer, GpuBufferPool};
+pub use buffer_pool::{BufferDesc, GpuBuffer, GpuBufferHandle, GpuBufferPool};
 
 mod pipeline_layout_pool;
-pub use pipeline_layout_pool::{GpuPipelineLayoutPool, PipelineLayoutDesc};
+pub use pipeline_layout_pool::{
+    GpuPipelineLayoutHandle, GpuPipelineLayoutPool, PipelineLayoutDesc,
+};
+
+mod compute_pipeline_pool;
+pub use compute_pipeline_pool::{
+    ComputePipelineCreationError, ComputePipelineDesc, GpuComputePipelineHandle,
+    GpuComputePipelinePool, GpuComputePipelinePoolAccessor,
+};
 
 mod render_pipeline_pool;
 pub use render_pipeline_pool::{
@@ -53,6 +61,7 @@ pub struct WgpuResourcePools {
     pub bind_group_layouts: GpuBindGroupLayoutPool,
     pub pipeline_layouts: GpuPipelineLayoutPool,
     pub render_pipelines: GpuRenderPipelinePool,
+    pub compute_pipelines: GpuComputePipelinePool,
     pub samplers: GpuSamplerPool,
     pub shader_modules: GpuShaderModulePool,
 
@@ -67,6 +76,7 @@ pub struct WgpuResourcePoolStatistics {
     pub num_bind_group_layouts: usize,
     pub num_pipeline_layouts: usize,
     pub num_render_pipelines: usize,
+    pub num_compute_pipelines: usize,
     pub num_samplers: usize,
     pub num_shader_modules: usize,
     pub num_bind_groups: usize,
@@ -82,6 +92,7 @@ impl WgpuResourcePoolStatistics {
             num_bind_group_layouts: _,
             num_pipeline_layouts: _,
             num_render_pipelines: _,
+            num_compute_pipelines: _,
             num_samplers: _,
             num_shader_modules: _,
             num_bind_groups: _,
@@ -100,6 +111,7 @@ impl WgpuResourcePools {
             num_bind_group_layouts: self.bind_group_layouts.num_resources(),
             num_pipeline_layouts: self.pipeline_layouts.num_resources(),
             num_render_pipelines: self.render_pipelines.num_resources(),
+            num_compute_pipelines: self.compute_pipelines.num_resources(),
             num_samplers: self.samplers.num_resources(),
             num_shader_modules: self.shader_modules.num_resources(),
             num_bind_groups: self.bind_groups.num_resources(),

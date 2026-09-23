@@ -62,18 +62,37 @@ impl MsaaMode {
 ///
 /// For simplicity, we don't allow changing any of these properties without tearing down the [`RenderContext`],
 /// even though it may be possible.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SurfaceSampling {
+    /// Shade each covered pixel once.
+    Pixel,
+    /// Pixel shading with reflection and transmission footprint filtering.
+    FilteredPixel,
+    #[default]
+    /// Shade covered MSAA samples independently on supported devices.
+    Sample,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct RenderConfig {
     pub msaa_mode: MsaaMode,
+    pub surface_sampling: SurfaceSampling,
     // TODO(andreas): Add a way to force the render tier?
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        Self {
+            msaa_mode: MsaaMode::Msaa4x,
+            surface_sampling: SurfaceSampling::Sample,
+        }
+    }
 }
 
 impl RenderConfig {
     /// Returns the best config for the given [`DeviceCaps`].
     pub fn best_for_device_caps(_device_caps: &DeviceCaps) -> Self {
-        Self {
-            msaa_mode: MsaaMode::Msaa4x,
-        }
+        Self::default()
     }
 
     /// Render config preferred for running most tests.
@@ -81,10 +100,7 @@ impl RenderConfig {
     /// This is optimized for low discrepancy between devices in order to
     /// to keep image comparison thresholds low.
     pub fn testing() -> Self {
-        Self {
-            // we use "testing" also for generating nice looking screenshots
-            msaa_mode: MsaaMode::Msaa4x,
-        }
+        Self::default()
     }
 }
 
@@ -171,6 +187,54 @@ impl RenderContext {
         output_format_color: wgpu::TextureFormat,
         config_provider: impl FnOnce(&DeviceCaps) -> RenderConfig,
     ) -> Result<Self, RenderContextError> {
+        let device_caps = DeviceCaps::from_adapter(adapter)?;
+        let adapter_info = adapter.get_info();
+        Ok(Self::new_impl(
+            device_caps,
+            adapter_info,
+            device,
+            queue,
+            output_format_color,
+            config_provider,
+        ))
+    }
+
+    /// Sister constructor to [`Self::new`] for embedders that already own a [`wgpu::Device`]/
+    /// [`wgpu::Queue`] pair and no longer have (or never had) the originating [`wgpu::Adapter`]
+    /// at hand.
+    ///
+    /// Identical to [`Self::new`] except for how `device_caps`/`adapter_info` are derived:
+    /// `DeviceCaps::from_adapter(adapter)` becomes `DeviceCaps::from_device(&device)`, and
+    /// `adapter.get_info()` becomes `device.adapter_info()`. Everything after that point is the
+    /// shared [`Self::new_impl`] — `Self::new`'s behavior is unchanged byte-for-byte.
+    pub fn new_from_device(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        output_format_color: wgpu::TextureFormat,
+        config_provider: impl FnOnce(&DeviceCaps) -> RenderConfig,
+    ) -> Result<Self, RenderContextError> {
+        let device_caps = DeviceCaps::from_device(&device);
+        let adapter_info = device.adapter_info();
+        Ok(Self::new_impl(
+            device_caps,
+            adapter_info,
+            device,
+            queue,
+            output_format_color,
+            config_provider,
+        ))
+    }
+
+    /// Shared body of [`Self::new`] and [`Self::new_from_device`] — everything that doesn't need
+    /// to know whether `device_caps`/`adapter_info` came from an adapter or a device directly.
+    fn new_impl(
+        device_caps: DeviceCaps,
+        adapter_info: wgpu::AdapterInfo,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        output_format_color: wgpu::TextureFormat,
+        config_provider: impl FnOnce(&DeviceCaps) -> RenderConfig,
+    ) -> Self {
         re_tracing::profile_function!();
 
         #[cfg(not(load_shaders_from_disk))]
@@ -181,8 +245,6 @@ impl RenderContext {
             crate::workspace_shaders::init();
         }
 
-        let device_caps = DeviceCaps::from_adapter(adapter)?;
-        let adapter_info = adapter.get_info();
         let config = config_provider(&device_caps);
 
         let frame_index_for_uncaptured_errors = Arc::new(AtomicU64::new(STARTUP_FRAME_IDX));
@@ -216,10 +278,11 @@ impl RenderContext {
             before_view_builder_encoder: Mutex::new(FrameGlobalCommandEncoder::new(&device)),
             frame_index: STARTUP_FRAME_IDX,
             num_view_builders_created: AtomicU64::new(0),
+            frame_commands: Mutex::new(Vec::new()),
         };
 
         // Register shader workarounds for the current device.
-        if adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
+        if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
             // Chrome/Tint does not support `@invariant` when targeting Metal.
             // https://bugs.chromium.org/p/chromium/issues/detail?id=1439273
             // (bug is fixed as of writing, but hasn't hit any public released version yet)
@@ -244,7 +307,7 @@ impl RenderContext {
         crate::renderer::register_renderers(&mut renderers);
         crate::resource_managers::register_renderers(&mut renderers);
 
-        Ok(Self {
+        Self {
             device,
             queue,
             device_caps,
@@ -263,7 +326,7 @@ impl RenderContext {
             active_frame,
             frame_index_for_uncaptured_errors,
             gpu_resources,
-        })
+        }
     }
 
     fn poll_device(&mut self) {
@@ -314,6 +377,7 @@ impl RenderContext {
             .lock()
             .0
             .is_some()
+            || !self.active_frame.frame_commands.lock().is_empty()
         {
             if self.active_frame.frame_index != STARTUP_FRAME_IDX {
                 re_log::error!("There was still a command encoder from the previous frame at the beginning of the current.
@@ -345,6 +409,7 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
             before_view_builder_encoder: Mutex::new(FrameGlobalCommandEncoder::new(&self.device)),
             frame_index: self.active_frame.frame_index.wrapping_add(1),
             num_view_builders_created: AtomicU64::new(0),
+            frame_commands: Mutex::new(Vec::new()),
         };
         let frame_index = self.active_frame.frame_index;
 
@@ -371,6 +436,7 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
                 bind_groups,
                 pipeline_layouts,
                 render_pipelines,
+                compute_pipelines,
                 samplers,
                 shader_modules,
                 textures,
@@ -381,6 +447,12 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
             // recompilation picks up all shaders that have been recompiled this frame.
             shader_modules.begin_frame(&self.device, &self.resolver, frame_index, &modified_paths);
             render_pipelines.begin_frame(
+                &self.device,
+                frame_index,
+                shader_modules,
+                pipeline_layouts,
+            );
+            compute_pipelines.begin_frame(
                 &self.device,
                 frame_index,
                 shader_modules,
@@ -403,28 +475,46 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
     }
 
     /// Call this at the end of a frame but before submitting command buffers (e.g. from [`crate::view_builder::ViewBuilder`])
-    pub fn before_submit(&mut self) {
+    ///
+    /// Submits the frame-global encoder, then every command buffer queued with
+    /// [`Self::queue_commands`], in one submission. Returns it when there was anything to submit.
+    pub fn before_submit(&mut self) -> Option<wgpu::SubmissionIndex> {
         re_tracing::profile_function!();
 
         // Unmap all write staging buffers, so we don't get validation errors about buffers still being mapped
         // that the gpu wants to read from.
         self.cpu_write_gpu_read_belt.lock().before_queue_submit();
 
-        if let Some(command_encoder) = self
+        let frame_global = self
             .active_frame
             .before_view_builder_encoder
             .lock()
             .0
             .take()
-        {
-            re_tracing::profile_scope!("finish & submit frame-global encoder");
-            let command_buffer = command_encoder.finish();
-
-            // TODO(andreas): For better performance, we should try to bundle this with the single submit call that is currently happening in eframe.
-            //                  How do we hook in there and make sure this buffer is submitted first?
-            self.inflight_queue_submissions
-                .push(self.queue.submit([command_buffer]));
+            .map(|command_encoder| {
+                re_tracing::profile_scope!("finish frame-global encoder");
+                command_encoder.finish()
+            });
+        let queued = std::mem::take(&mut *self.active_frame.frame_commands.lock());
+        if frame_global.is_none() && queued.is_empty() {
+            return None;
         }
+
+        // TODO(andreas): For better performance, we should try to bundle this with the single submit call that is currently happening in eframe.
+        //                  How do we hook in there and make sure this buffer is submitted first?
+        re_tracing::profile_scope!("submit frame");
+        let submission = self.queue.submit(frame_global.into_iter().chain(queued));
+        self.inflight_queue_submissions.push(submission.clone());
+        Some(submission)
+    }
+
+    /// Queues command buffers recorded for this frame. [`Self::before_submit`] submits them after
+    /// the frame-global encoder (whose uploads they may read), in the order they were queued.
+    ///
+    /// For an embedder that records its own passes (offscreen views, effects) and submits them with
+    /// the frame, instead of keeping a list of its own.
+    pub fn queue_commands(&self, commands: impl IntoIterator<Item = wgpu::CommandBuffer>) {
+        self.active_frame.frame_commands.lock().extend(commands);
     }
 
     /// Convenience method to get a registered renderer, initializing it on first access.
@@ -512,6 +602,10 @@ pub struct ActiveFrameContext {
 
     /// Number of view builders created in this frame so far.
     pub num_view_builders_created: AtomicU64,
+
+    /// Command buffers queued for this frame, submitted by [`RenderContext::before_submit`] after the
+    /// frame-global encoder.
+    frame_commands: Mutex<Vec<wgpu::CommandBuffer>>,
 }
 
 impl ActiveFrameContext {

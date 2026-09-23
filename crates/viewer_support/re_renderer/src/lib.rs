@@ -37,7 +37,9 @@
 #![expect(clippy::unwrap_used)]
 
 mod allocator;
+pub mod clip;
 pub mod device_caps;
+pub mod environment;
 pub mod importer;
 pub mod mesh;
 pub mod renderer;
@@ -95,7 +97,8 @@ pub use colormap::{
     grayscale_srgba,
 };
 pub use context::{
-    MsaaMode, RenderConfig, RenderContext, RenderContextError, adapter_info_summary,
+    MsaaMode, RenderConfig, RenderContext, RenderContextError, SurfaceSampling,
+    adapter_info_summary,
 };
 pub use depth_offset::DepthOffset;
 pub use draw_phases::{
@@ -109,7 +112,9 @@ pub use resource_managers::AlphaChannelUsage;
 pub use texture_readback::{TextureReadback, poll_read_texture, schedule_read_texture};
 pub use transparent_sort::SortOrderCache;
 // Re-export used color types directly.
+pub use clip::ClipPlane;
 pub use ecolor::{Color32, Hsva, Rgba};
+pub use environment::Environment;
 pub use gaussian_splat_builder::{GaussianSplatBatchBuilder, GaussianSplatBuilder};
 pub use global_bindings::GlobalBindings;
 pub use importer::{CpuModel, CpuModelMeshKey};
@@ -121,18 +126,22 @@ pub use re_span::Span;
 pub use rect::{RectF32, RectInt};
 pub use renderer::gpu_data::{GaussianShCoefficient, PositionRadius};
 pub use robust_bounds::RobustBounds;
-pub use shape_builder::ShapeBuilder;
+pub use shape_builder::{ShapeBuilder, textured_plane_grid};
 pub use size::Size;
 pub use texture_info::{Texture2DBufferInfo, Texture3DBufferInfo};
 pub use transform::RectTransform;
 pub use view_builder::{
-    BlendWithBackground, RenderMode, ViewBuilder, ViewBuilderId, ViewPickingConfiguration,
+    BlendWithBackground, DataTexture, RenderMode, ViewBuilder, ViewBuilderId,
+    ViewPickingConfiguration, backdrop_levels_read,
 };
 pub use wgpu_resources::{
-    BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
-    GpuPipelineLayoutPool, GpuRenderPipelineHandle, GpuRenderPipelinePool,
-    GpuRenderPipelinePoolAccessor, GpuShaderModuleHandle, GpuShaderModulePool, GpuTexture,
-    GpuTextureHandle, PipelineLayoutDesc, RenderPipelineDesc, ShaderModuleDesc, VertexBufferLayout,
+    BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, BufferDesc, ComputePipelineCreationError,
+    ComputePipelineDesc, GpuBindGroup, GpuBindGroupLayoutHandle, GpuBuffer, GpuBufferHandle,
+    GpuBufferPool, GpuComputePipelineHandle, GpuComputePipelinePool,
+    GpuComputePipelinePoolAccessor, GpuPipelineLayoutPool, GpuRenderPipelineHandle,
+    GpuRenderPipelinePool, GpuRenderPipelinePoolAccessor, GpuSamplerHandle, GpuSamplerPool,
+    GpuShaderModuleHandle, GpuShaderModulePool, GpuTexture, GpuTextureHandle, PipelineLayoutDesc,
+    RenderPipelineDesc, SamplerDesc, ShaderModuleDesc, TextureDesc, VertexBufferLayout,
     WgpuResourcePoolStatistics,
 };
 

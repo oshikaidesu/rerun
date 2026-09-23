@@ -91,6 +91,9 @@ mod av1;
 #[cfg(with_ffmpeg)]
 mod ffmpeg_cli;
 
+#[cfg(feature = "lavc")]
+mod lavc;
+
 #[cfg(with_ffmpeg)]
 pub use ffmpeg_cli::FFmpegCliDecoder;
 #[cfg(with_ffmpeg)]
@@ -159,6 +162,9 @@ pub enum DecodeError {
 
     #[error("Unsupported bits per component: {0}")]
     BadBitsPerComponent(#[size_bytes(ignore)] usize),
+
+    #[error("libavcodec: {0}")]
+    Lavc(#[size_bytes(ignore)] String),
 }
 
 impl DecodeError {
@@ -189,6 +195,9 @@ impl DecodeError {
 
             // Unsupported format.
             Self::BadBitsPerComponent(_) => false,
+
+            // libavcodec refused a chunk or failed to start; the next keyframe usually recovers.
+            Self::Lavc(_) => true,
         }
     }
 
@@ -205,6 +214,7 @@ impl DecodeError {
             Self::WebDecoder(err) => err.severity(),
             #[cfg(with_ffmpeg)]
             Self::Ffmpeg(_) => VideoPlaybackIssueSeverity::Error,
+            Self::Lavc(_) => VideoPlaybackIssueSeverity::Error,
 
             Self::UnsupportedCodec(_)
             | Self::Dav1dWithoutNasm
@@ -262,6 +272,10 @@ pub trait AsyncDecoder: Send + Sync {
     fn min_num_samples_to_enqueue_ahead(&self) -> usize {
         0
     }
+
+    /// The player is behind the requested frame. Decoders may trade quality for speed while this is set
+    /// (e.g. skip non-reference frames); default does nothing.
+    fn set_hurry(&mut self, _hurry: bool) {}
 }
 
 /// Creates a new async decoder for the given `video` data.
@@ -337,6 +351,26 @@ pub fn new_decoder(
                     }
                 }
 
+                #[cfg(feature = "lavc")]
+                crate::VideoCodec::H264
+                | crate::VideoCodec::H265
+                | crate::VideoCodec::VP8
+                | crate::VideoCodec::VP9
+                    if decode_settings.in_process =>
+                {
+                    re_log::trace!("Decoding in-process with libavcodec…");
+                    Ok(Box::new(sync_decoder_wrapper::SyncDecoderWrapper::new(
+                        debug_name.to_owned(),
+                        Box::new(lavc::LavcDecoder::new(
+                            debug_name.to_owned(),
+                            video,
+                            decode_settings.hw_acceleration,
+                            decode_settings.source_yuv,
+                        )?),
+                        output_sender,
+                    )))
+                }
+
                 #[cfg(with_ffmpeg)]
                 crate::VideoCodec::H264
                 | crate::VideoCodec::H265
@@ -347,6 +381,7 @@ pub fn new_decoder(
                     output_sender,
                     decode_settings.ffmpeg_path.clone(),
                     &video.codec,
+                    decode_settings.source_yuv,
                 )?)),
 
                 crate::VideoCodec::ImageSequence(codec) => {
@@ -624,7 +659,7 @@ impl PixelFormat {
             Self::Yuv { layout, .. } => match layout {
                 YuvPixelLayout::Y_U_V444 => 24,
                 YuvPixelLayout::Y_U_V422 => 16,
-                YuvPixelLayout::Y_U_V420 => 12,
+                YuvPixelLayout::Y_U_V420 | YuvPixelLayout::Y_UV420 => 12,
                 YuvPixelLayout::Y400 => 8,
             },
         }
@@ -640,13 +675,15 @@ pub enum YuvPixelLayout {
     Y_U_V444,
     Y_U_V422,
     Y_U_V420,
+    /// Semi-planar 4:2:0 (NV12): one Y plane, one interleaved UV plane.
+    Y_UV420,
     Y400,
 }
 
 /// Yuv value range used by [`PixelFormat::Yuv`].
 ///
 /// For details see `re_renderer`'s `YuvRange` type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub enum YuvRange {
     Limited,
     Full,
@@ -655,7 +692,7 @@ pub enum YuvRange {
 /// Yuv matrix coefficients used by [`PixelFormat::Yuv`].
 ///
 /// For details see `re_renderer`'s `YuvMatrixCoefficients` type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub enum YuvMatrixCoefficients {
     /// Interpret YUV as GBR.
     Identity,
@@ -706,6 +743,18 @@ pub struct DecodeSettings {
     /// If not provided, we use the path automatically determined by `ffmpeg_sidecar`.
     #[cfg(not(target_arch = "wasm32"))]
     pub ffmpeg_path: Option<std::path::PathBuf>,
+
+    /// Treat the decoded YUV as having this range and matrix instead of asking ffmpeg to
+    /// convert to full-range BT.709. Skips ffmpeg's CPU-side color conversion, which is
+    /// 5-12x slower than the decode itself at 4K.
+    ///
+    /// `None` keeps the conversion (needed for sources outside BT.601/BT.709).
+    pub source_yuv: Option<(YuvRange, YuvMatrixCoefficients)>,
+
+    /// Decode in this process (libavcodec: hardware, then its software decoders) instead of an ffmpeg child process.
+    /// One decoder object per stream instead of one process per stream.
+    #[serde(default)]
+    pub in_process: bool,
 }
 
 impl std::fmt::Display for DecodeHardwareAcceleration {

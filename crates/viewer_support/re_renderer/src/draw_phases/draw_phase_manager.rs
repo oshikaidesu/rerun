@@ -80,6 +80,9 @@ pub struct Drawable {
     /// e.g. draw order for coplanar drawables.
     pub secondary_sort_key: f32,
 
+    /// See [`DrawDataDrawable::layer_sort_key`].
+    pub layer_sort_key: i32,
+
     /// Draw data index plus rendering key.
     draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex,
 
@@ -135,8 +138,9 @@ impl Drawable {
     #[inline]
     fn sort_for_transparent_phase(drawables: &mut [Self]) {
         drawables.sort_by(|a, b| {
-            b.distance_sort_key
-                .total_cmp(&a.distance_sort_key)
+            a.layer_sort_key
+                .cmp(&b.layer_sort_key)
+                .then_with(|| b.distance_sort_key.total_cmp(&a.distance_sort_key))
                 .then_with(|| a.secondary_sort_key.total_cmp(&b.secondary_sort_key))
         });
     }
@@ -318,6 +322,7 @@ impl<'a> DrawableCollector<'a> {
         Drawable {
             distance_sort_key: info.distance_sort_key,
             secondary_sort_key: info.secondary_sort_key,
+            layer_sort_key: info.layer_sort_key,
             draw_data_payload: info.draw_data_payload,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                 renderer_key,
@@ -421,42 +426,49 @@ mod tests {
         Drawable {
             distance_sort_key: 0.0,
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(RENDERER_0, 0),
             draw_data_payload: 0,
         },
         Drawable {
             distance_sort_key: 1.0,
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(RENDERER_0, 1),
             draw_data_payload: 0,
         },
         Drawable {
             distance_sort_key: 2.0,
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(RENDERER_0, 1),
             draw_data_payload: 0,
         },
         Drawable {
             distance_sort_key: f32::MAX,
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(RENDERER_0, 0),
             draw_data_payload: 0,
         },
         Drawable {
             distance_sort_key: f32::INFINITY,
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(RENDERER_0, 0),
             draw_data_payload: 0,
         },
         Drawable {
             distance_sort_key: 2.0001,
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(RENDERER_2, 0),
             draw_data_payload: 0,
         },
         Drawable {
             distance_sort_key: 2.0001,
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(RENDERER_2, 0),
             draw_data_payload: 1, // Same as previous, but has a different payload.
         },
@@ -468,6 +480,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 0.0,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -476,6 +489,7 @@ mod tests {
             Drawable {
                 distance_sort_key: f32::MAX,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -484,6 +498,7 @@ mod tests {
             Drawable {
                 distance_sort_key: f32::INFINITY,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -492,6 +507,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 1.0,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 1,
                 ),
@@ -500,6 +516,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 2.0,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 1,
                 ),
@@ -508,6 +525,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 2.0001,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_2, 0,
                 ),
@@ -516,6 +534,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 2.0001,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_2, 0,
                 ),
@@ -549,6 +568,7 @@ mod tests {
             Drawable {
                 distance_sort_key: f32::INFINITY,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -557,6 +577,7 @@ mod tests {
             Drawable {
                 distance_sort_key: f32::MAX,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -565,6 +586,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 2.0001,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_2, 0,
                 ),
@@ -573,6 +595,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 2.0001,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_2, 0,
                 ),
@@ -581,6 +604,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 2.0,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 1,
                 ),
@@ -589,6 +613,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 1.0,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 1,
                 ),
@@ -597,6 +622,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 0.0,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -625,11 +651,35 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_for_transparent_phase_draws_a_higher_layer_later_whatever_the_distance() {
+        let drawable = |distance_sort_key, layer_sort_key, draw_data_payload| Drawable {
+            distance_sort_key,
+            secondary_sort_key: 0.0,
+            layer_sort_key,
+            draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(RENDERER_0, 0),
+            draw_data_payload,
+        };
+        // The top layer sits nearest the screen centre (closest), the bottom layer far off to the side.
+        let mut drawables = vec![drawable(1.0, 1, 1), drawable(9.0, 0, 0)];
+        Drawable::sort_for_transparent_phase(&mut drawables);
+        assert_eq!(drawables[0].draw_data_payload, 0);
+        assert_eq!(drawables[1].draw_data_payload, 1);
+
+        let mut drawables = vec![drawable(9.0, 1, 1), drawable(1.0, 0, 0)];
+        Drawable::sort_for_transparent_phase(&mut drawables);
+        assert_eq!(
+            drawables[0].draw_data_payload, 0,
+            "and a lower layer never jumps above because it is further"
+        );
+    }
+
+    #[test]
     fn test_sort_for_transparent_phase_uses_secondary_sort_key_for_equal_distances() {
         let mut drawables = vec![
             Drawable {
                 distance_sort_key: 4.0,
                 secondary_sort_key: 20.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -638,6 +688,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 4.0,
                 secondary_sort_key: 10.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -657,6 +708,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 25.0,
                 secondary_sort_key: 20.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -665,6 +717,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 4.0,
                 secondary_sort_key: 10.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -684,6 +737,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 4.1,
                 secondary_sort_key: 10.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -692,6 +746,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 4.0,
                 secondary_sort_key: 20.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -711,6 +766,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 4.0,
                 secondary_sort_key: 20.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -719,6 +775,7 @@ mod tests {
             Drawable {
                 distance_sort_key: 4.0,
                 secondary_sort_key: 10.0,
+                layer_sort_key: 0,
                 draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(
                     RENDERER_0, 0,
                 ),
@@ -748,6 +805,7 @@ mod tests {
         let make_drawable = |key: RendererTypeId, payload: DrawDataDrawablePayload| Drawable {
             distance_sort_key: f32::MAX,
             secondary_sort_key: 0.0,
+            layer_sort_key: 0,
             draw_data_plus_rendering_key: PackedRenderingKeyAndDrawDataIndex::new(key, 0),
             draw_data_payload: payload,
         };

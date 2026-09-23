@@ -21,6 +21,9 @@ pub enum GenericSkyboxType {
     #[default]
     GradientDark = 0,
     GradientBright = 1,
+
+    /// The view's [`crate::Environment`] radiance (`TargetConfiguration::environment`); black if none is bound.
+    Environment = 2,
 }
 
 mod gpu_data {
@@ -61,6 +64,7 @@ impl DrawData for GenericSkyboxDrawData {
             DrawDataDrawable {
                 distance_sort_key: 0.0,
                 secondary_sort_key: 0.0,
+                layer_sort_key: 0,
                 draw_data_payload: 0,
             },
         );

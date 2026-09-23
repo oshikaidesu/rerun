@@ -35,6 +35,23 @@ struct FrameUniformBuffer {
     /// Focal length in pixels: `framebuffer_resolution / (2 * tan_half_fov)`.
     /// Zero for orthographic projection.
     focal_length_in_pixels: vec2f,
+
+    /// Multiplier on the environment maps.
+    environment_strength: f32,
+
+    /// boolean (0/1): whether an environment is bound.
+    environment_present: u32,
+    /// Number of entries in the view's motion data texture (`TargetConfiguration::motion`).
+    motion_len: u32,
+    _padding_environment: u32,
+
+    /// Rotation applied to world directions before the equirectangular lookup.
+    environment_from_world: mat3x3f,
+    /// Constants the view's surface programs read; what they mean is the embedder's
+    /// (`TargetConfiguration::program_constants`).
+    program_constants: array<vec4f, 10>,
+    /// x: camera-forward depth below which world geometry starts to fade (0 = never); it is gone at x / 3.
+    near_fade: vec4f,
 };
 
 @group(0) @binding(0)
@@ -46,7 +63,52 @@ var nearest_sampler_repeat: sampler;
 var nearest_sampler_clamped: sampler;
 @group(0) @binding(3)
 var trilinear_sampler_repeat: sampler;
+@group(0) @binding(4)
+var environment_radiance: texture_2d<f32>;
+@group(0) @binding(5)
+var environment_irradiance: texture_2d<f32>;
+@group(0) @binding(6)
+var equirect_sampler: sampler;
+@group(0) @binding(7)
+var backdrop_texture: texture_2d<f32>;
+@group(0) @binding(8)
+var screen_sampler: sampler;
+
+/// A captured view of the scene the view's surface programs read (`TargetConfiguration::view_capture`).
+@group(0) @binding(9)
+var view_capture_texture: texture_2d<f32>;
+
+/// A coverage picture projected onto the world (`TargetConfiguration::coverage`).
+@group(0) @binding(10)
+var coverage_texture: texture_2d<f32>;
+
+/// Per-object data the embedder writes on the GPU (a motion resource), as a data texture: one
+/// vec4 per texel, row-major. The renderer only binds it: a program's `program_motion` /
+/// `program_tint` hooks decide what it means (see mesh_program.rs). Read with [`motion_at`].
+@group(0) @binding(11)
+var motion_texture: texture_2d<f32>;
+
+/// Number of entries in the view's motion resource.
+fn motion_len() -> u32 {
+    return frame.motion_len;
+}
+
+/// Entry `i` of the view's motion resource.
+fn motion_at(i: u32) -> vec4f {
+    let width = textureDimensions(motion_texture).x;
+    return textureLoad(motion_texture, vec2u(i % width, i / width), 0);
+}
 
 // See config.rs#DeviceTier
 const DEVICE_TIER_GLES = 0u;
 const DEVICE_TIER_WEBGPU = 1u;
+
+/// How much of a fragment survives the camera's near fade (Unity Camera Fading, Godot Distance Fade).
+fn near_fade(world_position: vec3f) -> f32 {
+    let start = frame.near_fade.x;
+    if start <= 0.0 {
+        return 1.0;
+    }
+    let depth = dot(world_position - frame.camera_position, frame.camera_forward);
+    return smoothstep(start / 3.0, start, depth);
+}

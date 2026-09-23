@@ -72,6 +72,19 @@ where
         handle
     }
 
+    /// [`Self::get_or_create`] for a creation that can fail: nothing is stored when it does.
+    pub fn get_or_try_create<E, F: FnOnce(&Desc) -> Result<Res, E>>(
+        &self,
+        desc: &Desc,
+        creation_func: F,
+    ) -> Result<Handle, E> {
+        if let Some(handle) = self.lookup.read().get(desc) {
+            return Ok(*handle);
+        }
+        let resource = creation_func(desc)?;
+        Ok(self.get_or_create(desc, |_| resource))
+    }
+
     pub fn recreate_resources<F: FnMut(&Desc) -> Option<Res>>(&mut self, mut recreation_func: F) {
         re_tracing::profile_function!();
 

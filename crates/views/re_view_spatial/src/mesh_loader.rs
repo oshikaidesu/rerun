@@ -191,6 +191,10 @@ impl LoadedMesh {
                 index_range: re_span::Span::from_start_len(0, num_indices as _),
                 albedo,
                 albedo_factor: albedo_factor.unwrap_or(encodings::Rgba32::WHITE).into(),
+                albedo_is_premultiplied: false,
+                albedo_is_cutout: false,
+                field_at_texcoord: false,
+                curves: None,
             }],
             bbox,
         };

@@ -194,6 +194,10 @@ impl AppOptions {
                 .video
                 .override_ffmpeg_path
                 .then(|| std::path::PathBuf::from(&self.video.ffmpeg_path)),
+
+            // The viewer keeps upstream's decoding: ffmpeg's colour conversion, one child process.
+            source_yuv: None,
+            in_process: false,
         }
     }
 }

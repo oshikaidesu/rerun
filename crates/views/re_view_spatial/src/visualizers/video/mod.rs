@@ -686,6 +686,7 @@ fn show_video_frame(
                         .multiplicative_tint
                         // Fade out if we don't have an up to date frame without issues.
                         .multiply(0.5 + 0.5 * animated_valid_frame),
+                    ..Default::default()
                 },
             };
             visualizer_data.add_pickable_rect(
@@ -817,6 +818,7 @@ fn show_video_frame(
             outline_mask: highlight.overall,
             multiplicative_tint: egui::Rgba::from(ctx.egui_ctx().tokens().text_default).to_opaque(),
             depth_offset,
+            ..Default::default()
         },
     };
 

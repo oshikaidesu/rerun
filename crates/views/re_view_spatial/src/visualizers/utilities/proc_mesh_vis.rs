@@ -337,6 +337,8 @@ impl<'ctx> ProcMeshDrawableBuilder<'ctx> {
                     } else {
                         None
                     },
+                    program: None,
+                    params: [0.0; 24],
                 });
             }
         }

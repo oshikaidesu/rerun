@@ -10,6 +10,10 @@ pub use super::sync_decoder::SyncDecoder;
 enum Command {
     Chunk(Chunk),
 
+    EndOfVideo,
+
+    Hurry(bool),
+
     // Boxed, because `VideoDataDescription` is huge.
     Reset(Box<VideoDataDescription>),
 
@@ -45,6 +49,9 @@ pub struct SyncDecoderWrapper {
 
     /// Instant communication to the decoder thread (circumventing the command queue).
     comms: Comms,
+
+    /// Forwarded from the wrapped decoder.
+    min_num_samples_to_enqueue_ahead: usize,
 }
 
 impl SyncDecoderWrapper {
@@ -57,6 +64,7 @@ impl SyncDecoderWrapper {
 
         let (command_tx, command_rx) = crate::channel(format!("{debug_name}-channel"));
         let comms = Comms::default();
+        let min_num_samples_to_enqueue_ahead = sync_decoder.min_num_samples_to_enqueue_ahead();
 
         let thread = std::thread::Builder::new()
             .name(format!("decoder of {debug_name}"))
@@ -75,17 +83,31 @@ impl SyncDecoderWrapper {
             _thread: thread,
             command_tx,
             comms,
+            min_num_samples_to_enqueue_ahead,
         }
     }
 }
 
 impl AsyncDecoder for SyncDecoderWrapper {
+    fn min_num_samples_to_enqueue_ahead(&self) -> usize {
+        self.min_num_samples_to_enqueue_ahead
+    }
+
     // NOTE: The interface is all `&mut self` to avoid certain types of races.
     fn submit_chunk(&mut self, chunk: Chunk) -> Result<()> {
         re_tracing::profile_function!();
         self.command_tx.send(Command::Chunk(chunk)).ok();
 
         Ok(())
+    }
+
+    fn end_of_video(&mut self) -> Result<()> {
+        self.command_tx.send(Command::EndOfVideo).ok();
+        Ok(())
+    }
+
+    fn set_hurry(&mut self, hurry: bool) {
+        self.command_tx.send(Command::Hurry(hurry)).ok();
     }
 
     /// Resets the decoder.
@@ -143,6 +165,12 @@ fn decoder_thread(
                     decoder.submit_chunk(&comms.should_stop, chunk, output_sender);
                 }
             }
+            Command::EndOfVideo => {
+                if !has_outstanding_reset {
+                    decoder.end_of_video(output_sender);
+                }
+            }
+            Command::Hurry(hurry) => decoder.set_hurry(hurry),
             Command::Reset(video_data_description) => {
                 decoder.reset(&video_data_description);
                 comms.num_outstanding_resets.fetch_sub(1, Ordering::Release);

@@ -68,8 +68,8 @@ pub fn init() {
     }
 
     {
-        let virtpath = Path::new("shader/instanced_mesh.wgsl");
-        let content = include_str!("../shader/instanced_mesh.wgsl").into();
+        let virtpath = Path::new("shader/instanced_mesh_base.wgsl");
+        let content = include_str!("../shader/instanced_mesh_base.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
     }
 
@@ -110,6 +110,12 @@ pub fn init() {
     }
 
     {
+        let virtpath = Path::new("shader/paths.wgsl");
+        let content = include_str!("../shader/paths.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
         let virtpath = Path::new("shader/point_cloud.wgsl");
         let content = include_str!("../shader/point_cloud.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
@@ -122,8 +128,20 @@ pub fn init() {
     }
 
     {
+        let virtpath = Path::new("shader/rectangle_fragment.wgsl");
+        let content = include_str!("../shader/rectangle_fragment.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
         let virtpath = Path::new("shader/rectangle_fs.wgsl");
         let content = include_str!("../shader/rectangle_fs.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
+        let virtpath = Path::new("shader/rectangle_vertex.wgsl");
+        let content = include_str!("../shader/rectangle_vertex.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
     }
 
@@ -152,6 +170,12 @@ pub fn init() {
     }
 
     {
+        let virtpath = Path::new("shader/surface.wgsl");
+        let content = include_str!("../shader/surface.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
         let virtpath = Path::new("shader/test_triangle.wgsl");
         let content = include_str!("../shader/test_triangle.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
@@ -170,6 +194,12 @@ pub fn init() {
     }
 
     {
+        let virtpath = Path::new("shader/utils/clip.wgsl");
+        let content = include_str!("../shader/utils/clip.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
         let virtpath = Path::new("shader/utils/depth_offset.wgsl");
         let content = include_str!("../shader/utils/depth_offset.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
@@ -178,6 +208,12 @@ pub fn init() {
     {
         let virtpath = Path::new("shader/utils/encoding.wgsl");
         let content = include_str!("../shader/utils/encoding.wgsl").into();
+        fs.create_file(virtpath, content).unwrap();
+    }
+
+    {
+        let virtpath = Path::new("shader/utils/field.wgsl");
+        let content = include_str!("../shader/utils/field.wgsl").into();
         fs.create_file(virtpath, content).unwrap();
     }
 

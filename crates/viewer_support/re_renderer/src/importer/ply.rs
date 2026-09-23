@@ -121,6 +121,10 @@ pub fn load_ply_from_buffer(
         index_range: re_span::Span::from_start_len(0, num_indices as u32),
         albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
         albedo_factor: crate::Rgba::WHITE,
+        albedo_is_premultiplied: false,
+        albedo_is_cutout: false,
+        field_at_texcoord: false,
+        curves: None,
     };
 
     let bbox = crate::util::bounding_box_from_points(parsed.vertex_positions.iter().copied());

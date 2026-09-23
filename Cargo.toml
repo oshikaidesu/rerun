@@ -306,6 +306,7 @@ econtext = "0.2.0" # Prints error contexts on crashes
 ehttp = "0.7.1"
 enumset = "1.1"
 env_filter = { version = "2.0", default-features = false }
+ffmpeg-next = "7.1"
 ffmpeg-sidecar = { version = "2.5", default-features = false }
 fixed = { version = "1.31", default-features = false }
 fjadra = "0.2.1"
@@ -346,6 +347,8 @@ lance = { version = "10.0", default-features = false } # When you update this, a
 libc = "0.2.189"
 linked-hash-map = { version = "0.5.6", default-features = false }
 log = "0.4.33"
+lyon_algorithms = "1.0.20"
+lyon_tessellation = "1.0.20"
 lz4_flex = "0.13.1"
 macaw = "0.30.0"
 mcap = "0.25.0"
@@ -362,7 +365,10 @@ natord = "1.0"
 ndarray = "0.16.1" # pinned by `lance-index` (lance family) and `numpy` to 0.16; 0.17 would duplicate.
 never = "0.1.0"
 nohash-hasher = "0.2.0"
-notify = { version = "8.2", features = ["macos_kqueue"] }
+# The default FSEvents backend on macOS: the kqueue backend treats the first unwatched file written in a
+# watched directory as new (notify 8.2.0 kqueue.rs:175) and drops later changes, which breaks shader
+# hot reloading in `re_renderer`.
+notify = "8.2"
 # `unicode-segmentation` is off so that match indices are plain `char` indices,
 # which is what we index with when highlighting matched characters.
 nucleo-matcher = { version = "0.3.1", default-features = false, features = [

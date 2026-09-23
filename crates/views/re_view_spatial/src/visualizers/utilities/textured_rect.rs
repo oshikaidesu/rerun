@@ -81,6 +81,7 @@ pub fn textured_rect_from_image(
                 multiplicative_tint,
                 depth_offset: ent_context.depth_offset,
                 outline_mask: ent_context.highlight.overall,
+                ..Default::default()
             },
         }
     })

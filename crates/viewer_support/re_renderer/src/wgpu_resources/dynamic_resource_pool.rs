@@ -25,6 +25,15 @@ pub struct DynamicResource<Handle, Desc: Debug, Res> {
     pub handle: Handle,
 }
 
+impl<Handle: Debug, Desc: Debug, Res> Debug for DynamicResource<Handle, Desc, Res> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicResource")
+            .field("handle", &self.handle)
+            .field("creation_desc", &self.creation_desc)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<Handle, Desc, Res> std::ops::Deref for DynamicResource<Handle, Desc, Res>
 where
     Desc: Debug,
@@ -127,6 +136,27 @@ where
         state.all_resources[handle].clone()
     }
 
+    /// Registers a resource this pool did not create, so that it can be referred to by handle.
+    ///
+    /// Unlike [`Self::alloc`] this neither creates anything nor counts towards the pool's memory
+    /// statistics: the memory belongs to whoever handed the resource over. Reclamation still
+    /// applies once the pool is the only owner, so a borrowed resource must be kept alive by its
+    /// importer for as long as it may be sampled — see `TextureManager2D::import_gpu_premultiplied`.
+    pub fn insert(&self, inner: Res, desc: &Desc) -> Arc<DynamicResource<Handle, Desc, Res>> {
+        re_tracing::profile_function!();
+        let mut state = self.state.write();
+
+        let handle = state.all_resources.insert_with_key(|handle| {
+            Arc::new(DynamicResource {
+                inner,
+                creation_desc: desc.clone(),
+                handle,
+            })
+        });
+
+        state.all_resources[handle].clone()
+    }
+
     pub fn get_from_handle(
         &self,
         handle: Handle,
@@ -145,7 +175,13 @@ where
             })
     }
 
-    pub fn begin_frame(&mut self, frame_index: u64, mut on_destroy_resource: impl FnMut(&Res)) {
+    /// `on_destroy_resource` receives the handle as well, so that pools holding resources they do
+    /// not own (see [`Self::insert`]) can drop the bookkeeping without destroying the resource.
+    pub fn begin_frame(
+        &mut self,
+        frame_index: u64,
+        mut on_destroy_resource: impl FnMut(Handle, &Res),
+    ) {
         re_tracing::profile_function!();
         self.current_frame_index = frame_index;
         let state = self.state.get_mut();
@@ -173,7 +209,7 @@ where
                     continue;
                 };
                 update_stats(&desc);
-                on_destroy_resource(&removed_resource);
+                on_destroy_resource(resource, &removed_resource.inner);
             }
         }
 
@@ -194,7 +230,7 @@ where
                     true
                 } else {
                     update_stats(&resource.creation_desc);
-                    on_destroy_resource(&resource.inner);
+                    on_destroy_resource(resource.handle, &resource.inner);
                     false
                 }
             } else {
@@ -291,7 +327,7 @@ mod tests {
         {
             let drop_counter_before = DROP_COUNTER.with(|c| c.get());
             let mut called_destroy = false;
-            pool.begin_frame(1, |_| called_destroy = true);
+            pool.begin_frame(1, |_, _| called_destroy = true);
 
             assert!(!called_destroy);
             assert_eq!(drop_counter_before, DROP_COUNTER.with(|c| c.get()),);
@@ -306,9 +342,9 @@ mod tests {
         {
             let drop_counter_before = DROP_COUNTER.with(|c| c.get());
             let mut called_destroy = false;
-            pool.begin_frame(2, |_| called_destroy = true);
+            pool.begin_frame(2, |_, _| called_destroy = true);
             assert!(!called_destroy);
-            pool.begin_frame(3, |_| called_destroy = true);
+            pool.begin_frame(3, |_, _| called_destroy = true);
             assert!(called_destroy);
             let drop_counter_now = DROP_COUNTER.with(|c| c.get());
             assert_eq!(
@@ -327,10 +363,10 @@ mod tests {
             drop(resource1);
 
             let mut called_destroy = false;
-            pool.begin_frame(4, |_| called_destroy = true);
+            pool.begin_frame(4, |_, _| called_destroy = true);
             assert!(!called_destroy);
             assert_eq!(drop_counter_before, DROP_COUNTER.with(|c| c.get()),);
-            pool.begin_frame(5, |_| called_destroy = true);
+            pool.begin_frame(5, |_, _| called_destroy = true);
             assert!(called_destroy);
             assert_eq!(drop_counter_before + 1, DROP_COUNTER.with(|c| c.get()),);
         }
@@ -343,7 +379,7 @@ mod tests {
         let res0 = pool.alloc(&ConcreteResourceDesc(0), |_| ConcreteResource);
         let res1 = pool.alloc(&ConcreteResourceDesc(0), |_| ConcreteResource);
         assert_ne!(res0.handle, res1.handle);
-        pool.begin_frame(1234, |_| {});
+        pool.begin_frame(1234, |_, _| {});
     }
 
     // A resource gets the same handle when re-used.
@@ -354,11 +390,11 @@ mod tests {
         let res0 = pool.alloc(&ConcreteResourceDesc(0), |_| ConcreteResource);
         let handle0 = res0.handle;
         drop(res0);
-        pool.begin_frame(1234, |_| {});
+        pool.begin_frame(1234, |_, _| {});
         let res1 = pool.alloc(&ConcreteResourceDesc(0), |_| ConcreteResource);
 
         assert_eq!(handle0, res1.handle);
-        pool.begin_frame(1235, |_| {});
+        pool.begin_frame(1235, |_, _| {});
     }
 
     fn allocate_resources(

@@ -3,6 +3,7 @@
 #import <./utils/srgb.wgsl>
 #import <./utils/camera.wgsl>
 #import <./screen_triangle_vertex.wgsl>
+#import <./utils/lighting.wgsl>
 
 struct UniformBuffer {
     // See `GenericSkyboxType` in `generic_skybox.rs`
@@ -12,6 +13,7 @@ struct UniformBuffer {
 
 const GRADIENT_DARK: u32 = 0u;
 const GRADIENT_BRGHT: u32 = 1u;
+const ENVIRONMENT: u32 = 2u;
 
 @group(1) @binding(0)
 var<uniform> uniforms: UniformBuffer;
@@ -51,6 +53,11 @@ fn dither_interleaved(rgb: vec3f, levels: f32, frag_coord: vec4<f32>) -> vec3f {
 @fragment
 fn main(in: FragmentInput, @builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4f {
     let camera_dir = camera_ray_direction_from_screenuv(in.texcoord);
+
+    if uniforms.background_type == ENVIRONMENT {
+        // Already linear; no dithering, the map is float.
+        return vec4f(environment_radiance_along(camera_dir), 1.0);
+    }
 
     var rgb: vec3f;
     if uniforms.background_type == GRADIENT_DARK {

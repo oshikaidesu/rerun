@@ -191,6 +191,51 @@ pub struct Material {
 
     /// Factor applied to the decoded albedo color.
     pub albedo_factor: Rgba,
+    /// The sampled texture contains linear premultiplied RGBA, including coverage.
+    pub albedo_is_premultiplied: bool,
+    /// The premultiplied texture's coverage is the surface's silhouette (a cutout): what it covers
+    /// is drawn opaque — un-premultiplied colour, full coverage, depth-tested.
+    pub albedo_is_cutout: bool,
+    /// The vertex field (`program_field`) is evaluated at the vertex's texcoord (x, y, 0) instead of
+    /// its position, e.g. a stroke whose texcoord is its centreline point keeps its width under the
+    /// field.
+    pub field_at_texcoord: bool,
+    /// Coverage comes from these curves, evaluated per fragment, instead of the triangles' edges:
+    /// the triangles only need to cover the curves' bounds. Exact at any magnification.
+    pub curves: Option<std::sync::Arc<CurveFill>>,
+}
+
+/// Quadratic Bézier outlines (p0, p1, p2 in mesh units) whose winding decides coverage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurveFill {
+    pub curves: Vec<[glam::Vec2; 3]>,
+    pub even_odd: bool,
+    /// Paint varying over the fill; `None` paints the vertex colour. Shared by the pieces of one fill.
+    pub gradient: Option<std::sync::Arc<CurveGradient>>,
+}
+
+/// Where along a gradient a point lies (`t` in 0..=1), evaluated per fragment; the colour at `t`
+/// comes from `ramp`, which the embedder samples from its own colour model.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurveGradient {
+    pub kind: CurveGradientKind,
+    /// `start`, `end` are in the gradient's own space: `mesh = space_origin + gradient * space_scale`
+    /// (an object-bounding-box gradient stretches with its object).
+    pub space_origin: glam::Vec2,
+    pub space_scale: glam::Vec2,
+    pub start: glam::Vec2,
+    pub end: glam::Vec2,
+    /// Straight sRGB with alpha, evenly spaced over t = 0..=1.
+    pub ramp: Vec<crate::Rgba32Unmul>,
+}
+
+/// Keep in sync with `GRADIENT_` in `instanced_mesh_base.wgsl`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurveGradientKind {
+    Linear = 1,
+    Radial = 2,
+    Angular = 3,
+    Diamond = 4,
 }
 
 #[derive(Clone)]
@@ -247,6 +292,9 @@ pub(crate) mod gpu_data {
     pub enum TextureFormat {
         Rgba = 0,
         Grayscale = 1,
+        PremultipliedRgba = 2,
+        Curves = 3,
+        OpaquePremultipliedRgba = 4,
     }
 
     /// Keep in sync with [`MaterialUniformBuffer`] in `instanced_mesh.wgsl`
@@ -255,14 +303,45 @@ pub(crate) mod gpu_data {
     pub struct MaterialUniformBuffer {
         albedo_factor: ecolor::Rgba,
         texture_format: wgpu_buffer_types::U32RowPadded,
-        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 2],
+        field_at_texcoord: wgpu_buffer_types::U32RowPadded,
+        curve_count: wgpu_buffer_types::U32RowPadded,
+        even_odd: wgpu_buffer_types::U32RowPadded,
+        gradient_kind: wgpu_buffer_types::U32RowPadded,
+        gradient_line: wgpu_buffer_types::Vec4,
+        gradient_space: wgpu_buffer_types::Vec4,
+        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 8],
     }
 
     impl MaterialUniformBuffer {
-        pub fn new(albedo_factor: ecolor::Rgba, texture_format: TextureFormat) -> Self {
+        pub fn new(
+            albedo_factor: ecolor::Rgba,
+            texture_format: TextureFormat,
+            field_at_texcoord: bool,
+            curves: Option<&super::CurveFill>,
+        ) -> Self {
+            let gradient = curves.and_then(|fill| fill.gradient.as_ref());
             Self {
                 albedo_factor,
                 texture_format: (texture_format as u32).into(),
+                field_at_texcoord: u32::from(field_at_texcoord).into(),
+                curve_count: curves.map_or(0, |fill| fill.curves.len() as u32).into(),
+                even_odd: u32::from(curves.is_some_and(|fill| fill.even_odd)).into(),
+                gradient_kind: gradient.map_or(0, |g| g.kind as u32).into(),
+                gradient_line: gradient
+                    .map_or(glam::Vec4::ZERO, |g| {
+                        glam::vec4(g.start.x, g.start.y, g.end.x, g.end.y)
+                    })
+                    .into(),
+                gradient_space: gradient
+                    .map_or(glam::vec4(0.0, 0.0, 1.0, 1.0), |g| {
+                        glam::vec4(
+                            g.space_origin.x,
+                            g.space_origin.y,
+                            g.space_scale.x,
+                            g.space_scale.y,
+                        )
+                    })
+                    .into(),
                 end_padding: Default::default(),
             }
         }
@@ -356,11 +435,19 @@ impl GpuMesh {
                 data.materials.iter().map(|material| {
                     gpu_data::MaterialUniformBuffer::new(
                         material.albedo_factor,
-                        if material.albedo.texture.format().components() == 1 {
+                        if material.curves.is_some() {
+                            gpu_data::TextureFormat::Curves
+                        } else if material.albedo_is_premultiplied && material.albedo_is_cutout {
+                            gpu_data::TextureFormat::OpaquePremultipliedRgba
+                        } else if material.albedo_is_premultiplied {
+                            gpu_data::TextureFormat::PremultipliedRgba
+                        } else if material.albedo.texture.format().components() == 1 {
                             gpu_data::TextureFormat::Grayscale
                         } else {
                             gpu_data::TextureFormat::Rgba
                         },
+                        material.field_at_texcoord,
+                        material.curves.as_deref(),
                     )
                 }),
             );
@@ -373,6 +460,30 @@ impl GpuMesh {
             for (material, uniform_buffer_binding) in
                 std::iter::zip(&data.materials, uniform_buffer_bindings)
             {
+                // A data texture, two texels per curve, as other renderers keep per-element data.
+                let curves = match &material.curves {
+                    Some(fill) if !fill.curves.is_empty() => {
+                        let data: Vec<[f32; 4]> = fill
+                            .curves
+                            .iter()
+                            .flat_map(|[a, b, c]| [[a.x, a.y, b.x, b.y], [c.x, c.y, 0.0, 0.0]])
+                            .collect();
+                        let mut source = crate::DataTextureSource::<[f32; 4]>::new(ctx);
+                        if let Err(err) = source.extend_from_slice(&data) {
+                            re_log::error_once!(
+                                "Failed to write the curves of {}: {err}",
+                                material.label
+                            );
+                        }
+                        source
+                            .finish(
+                                wgpu::TextureFormat::Rgba32Float,
+                                format!("{} - curves", material.label),
+                            )?
+                            .handle
+                    }
+                    _ => ctx.texture_manager_2d.zeroed_texture_float().handle,
+                };
                 let bind_group = pools.bind_groups.alloc(
                     device,
                     pools,
@@ -380,14 +491,18 @@ impl GpuMesh {
                         label: material.label.clone(),
                         entries: smallvec![
                             BindGroupEntry::DefaultTextureView(material.albedo.handle()),
-                            uniform_buffer_binding
+                            uniform_buffer_binding,
+                            BindGroupEntry::DefaultTextureView(curves),
                         ],
                         layout: mesh_bind_group_layout,
                     },
                 );
 
                 // TODO(#12223): handle texture transparency
-                let is_transparent = material.albedo_factor.a() < 1.0;
+                let is_transparent = material.curves.is_some()
+                    || (material.albedo_is_premultiplied && !material.albedo_is_cutout)
+                    || material.albedo_factor.a() < 1.0
+                    || data.vertex_colors.iter().any(|color| color.0[3] < 255);
 
                 materials.push(GpuMaterial {
                     index_range: material.index_range,

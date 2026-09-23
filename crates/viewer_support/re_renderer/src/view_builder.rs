@@ -25,6 +25,14 @@ pub enum ViewBuilderError {
 
     #[error(transparent)]
     Renderer(#[from] crate::RendererRegistrationError),
+    #[error("external resolved format must be MAIN_TARGET_COLOR_FORMAT, got {got:?}")]
+    ExternalResolvedFormat { got: wgpu::TextureFormat },
+
+    #[error("external resolved size {got:?} must match config.resolution_in_pixel {expected:?}")]
+    ExternalResolvedSize { got: [u32; 2], expected: [u32; 2] },
+
+    #[error("external resolved texture must have RENDER_ATTACHMENT")]
+    ExternalResolvedUsage,
 }
 
 /// The highest level rendering block in `re_renderer`.
@@ -233,6 +241,17 @@ pub enum BlendWithBackground {
     Premultiplied = 2,
 }
 
+/// Mip levels a surface reads from a backdrop of `level_count` levels (base included) when its
+/// roughness is at most `max_roughness`. Mirrors the lod in `utils/lighting.wgsl`
+/// (`pow(r, 0.8) * (levels - 1) * 0.55`, trilinear reads the level above too), so the embedder can
+/// stop generating levels nobody samples. Only valid while `FILTER_SURFACE_FOOTPRINT` is off.
+pub fn backdrop_levels_read(max_roughness: f32, level_count: u32) -> u32 {
+    let lod = max_roughness.clamp(0.0, 1.0).powf(0.8)
+        * level_count.max(1).saturating_sub(1) as f32
+        * 0.55;
+    (lod.ceil() as u32 + 1).clamp(1, level_count.max(1))
+}
+
 /// Basic configuration for a target view.
 #[derive(Debug)]
 pub struct TargetConfiguration {
@@ -276,6 +295,55 @@ pub struct TargetConfiguration {
     /// If this is `None`, no picking layer will be created.
     /// For details see [`ViewPickingConfiguration`].
     pub picking_config: Option<ViewPickingConfiguration>,
+
+    /// Image-based environment lighting the view's meshes. Draw [`crate::renderer::GenericSkyboxType::Environment`]
+    /// to also show it as the background.
+    pub environment: Option<crate::Environment>,
+
+    /// What is already drawn beneath this view's meshes, in screen space (premultiplied, with a mip
+    /// chain). Transmissive surfaces refract into it; where its alpha is 0 the environment shows.
+    pub backdrop: Option<crate::resource_managers::GpuTexture2D>,
+    /// A captured view of the scene (a View resource) the view's surface programs read, e.g. the faces
+    /// of a reflection probe. Bound as `view_capture_texture`.
+    pub view_capture: Option<crate::resource_managers::GpuTexture2D>,
+    /// A coverage picture projected onto the world (a Coverage resource), e.g. what blocks a light.
+    /// Bound as `coverage_texture`.
+    pub coverage: Option<crate::resource_managers::GpuTexture2D>,
+    /// Constants the view's surface programs read (`frame.program_constants`), e.g. where a capture
+    /// was taken or how the coverage is projected. What they mean is the embedder's.
+    pub program_constants: [glam::Vec4; 10],
+    /// World geometry closer to the camera than this (along its forward axis) fades out, gone at a third
+    /// of it. 0 = never.
+    pub near_fade_distance: f32,
+    /// Per-object data the embedder writes on the GPU (a Motion resource): a data texture of vec4
+    /// texels (`Rgba32Float`, row-major), read in shaders with `motion_at` / `motion_len`. A
+    /// program's `program_motion` / `program_tint` hooks decide what it means. `None` binds nothing.
+    pub motion: Option<DataTexture>,
+}
+
+fn environment_bindings(
+    ctx: &RenderContext,
+    config: &TargetConfiguration,
+) -> crate::global_bindings::EnvironmentBindings {
+    let zero = ctx.texture_manager_2d.zeroed_texture_float().handle;
+    let environment = config.environment.as_ref();
+    crate::global_bindings::EnvironmentBindings {
+        radiance: environment.map_or(zero, |e| e.radiance.handle()),
+        irradiance: environment.map_or(zero, |e| e.irradiance.handle()),
+        backdrop: config.backdrop.as_ref().map_or(zero, |b| b.handle()),
+        view_capture: config.view_capture.as_ref().map_or(zero, |c| c.handle()),
+        coverage: config.coverage.as_ref().map_or(zero, |c| c.handle()),
+        motion: config.motion.as_ref().map_or(zero, |m| m.texture.handle),
+    }
+}
+
+/// Elements the embedder writes into a texture, one per texel, row-major (as [`crate::DataTextureSource`]
+/// lays them out): per-object data a view binds for shaders on every device tier.
+#[derive(Clone, Debug)]
+pub struct DataTexture {
+    pub texture: GpuTexture,
+    /// How many texels hold elements; the rest of the texture is not read.
+    pub len: u32,
 }
 
 impl Default for TargetConfiguration {
@@ -295,6 +363,13 @@ impl Default for TargetConfiguration {
             outline_config: None,
             blend_with_background: BlendWithBackground::No,
             picking_config: None,
+            environment: None,
+            backdrop: None,
+            view_capture: None,
+            coverage: None,
+            program_constants: [glam::Vec4::ZERO; 10],
+            near_fade_distance: 0.0,
+            motion: None,
         }
     }
 }
@@ -443,6 +518,15 @@ impl ViewBuilder {
         config: TargetConfiguration,
         view_id: ViewBuilderId,
     ) -> Result<Self, ViewBuilderError> {
+        Self::new_impl(ctx, config, view_id, None)
+    }
+
+    fn new_impl(
+        ctx: &RenderContext,
+        config: TargetConfiguration,
+        view_id: ViewBuilderId,
+        external_resolved: Option<GpuTexture>,
+    ) -> Result<Self, ViewBuilderError> {
         re_tracing::profile_function!();
 
         // Can't handle 0 size resolution since this would imply creating zero sized textures.
@@ -458,27 +542,34 @@ impl ViewBuilder {
         };
 
         // TODO(andreas): Should tonemapping preferences go here as well? Likely!
-        let main_target_msaa = ctx.gpu_resources.textures.alloc(
-            &ctx.device,
-            &TextureDesc {
-                label: format!("{:?} - main target", config.name).into(),
-                size,
-                mip_level_count: 1,
-                sample_count: render_cfg.msaa_mode.sample_count(),
-                dimension: wgpu::TextureDimension::D2,
-                format: Self::MAIN_TARGET_COLOR_FORMAT,
-                usage: if msaa_enabled {
-                    // If MSAA is enabled, we don't read this texture ourselves as it is only used for resolve.
-                    wgpu::TextureUsages::RENDER_ATTACHMENT
-                } else {
-                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+        let main_target_msaa = match (&external_resolved, msaa_enabled) {
+            // Without MSAA an external target is drawn into directly.
+            (Some(resolved), false) => resolved.clone(),
+            _ => ctx.gpu_resources.textures.alloc(
+                &ctx.device,
+                &TextureDesc {
+                    label: format!("{:?} - main target", config.name).into(),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: render_cfg.msaa_mode.sample_count(),
+                    dimension: wgpu::TextureDimension::D2,
+                    format: Self::MAIN_TARGET_COLOR_FORMAT,
+                    usage: if msaa_enabled {
+                        // If MSAA is enabled, we don't read this texture ourselves as it is only used for resolve.
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                    } else {
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                    },
                 },
-            },
-        );
+            ),
+        };
 
         // Like hdr_render_target, but with MSAA resolved.
         // We only need to distinguish this if we're using MSAA.
-        let main_target_resolved = if msaa_enabled {
+        let main_target_resolved = if let Some(resolved) = external_resolved {
+            resolved
+        } else if msaa_enabled {
             ctx.gpu_resources.textures.alloc(
                 &ctx.device,
                 &TextureDesc {
@@ -603,6 +694,18 @@ impl ViewBuilder {
             },
             framebuffer_resolution,
             focal_length_in_pixels: framebuffer_resolution / (2.0 * tan_half_fov),
+            environment_strength: config.environment.as_ref().map_or(0.0, |e| e.strength),
+            environment_present: config.environment.is_some() as u32,
+            motion_len: config.motion.as_ref().map_or(0, |m| m.len),
+            _padding_environment: Default::default(),
+            environment_from_world: config
+                .environment
+                .as_ref()
+                .map_or(glam::Mat3::IDENTITY, |e| e.environment_from_world)
+                .into(),
+            program_constants: config.program_constants.map(Into::into),
+            near_fade: glam::vec4(config.near_fade_distance.max(0.0), 0.0, 0.0, 0.0).into(),
+            _end_padding: Default::default(),
         };
         let frame_uniform_buffer = create_and_fill_uniform_buffer(
             ctx,
@@ -614,6 +717,7 @@ impl ViewBuilder {
             &ctx.gpu_resources,
             &ctx.device,
             frame_uniform_buffer,
+            environment_bindings(ctx, &config),
         );
 
         let mut debug_overlays: Vec<QueueableDrawData> = Vec::new();
@@ -724,9 +828,65 @@ impl ViewBuilder {
         Ok(view_builder)
     }
 
+    /// Like [`Self::new`], but the view resolves into `texture`, which the caller owns (a window's
+    /// surface, an embedder's canvas), instead of a pooled target.
+    pub fn new_with_external_resolved(
+        ctx: &RenderContext,
+        config: TargetConfiguration,
+        view_id: ViewBuilderId,
+        texture: &wgpu::Texture,
+    ) -> Result<Self, ViewBuilderError> {
+        if texture.format() != Self::MAIN_TARGET_COLOR_FORMAT {
+            return Err(ViewBuilderError::ExternalResolvedFormat {
+                got: texture.format(),
+            });
+        }
+        let got = [texture.width(), texture.height()];
+        if got != config.resolution_in_pixel {
+            return Err(ViewBuilderError::ExternalResolvedSize {
+                got,
+                expected: config.resolution_in_pixel,
+            });
+        }
+        if !texture
+            .usage()
+            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        {
+            return Err(ViewBuilderError::ExternalResolvedUsage);
+        }
+        let resolved = ctx.gpu_resources.textures.import(
+            texture.clone(),
+            &TextureDesc {
+                label: format!("{:?} - external resolved", config.name).into(),
+                size: texture.size(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: Self::MAIN_TARGET_COLOR_FORMAT,
+                usage: texture.usage(),
+            },
+        );
+        Self::new_impl(ctx, config, view_id, Some(resolved))
+    }
+
     /// Resolution in pixels as configured on view builder creation.
     pub fn resolution_in_pixel(&self) -> [u32; 2] {
         self.setup.resolution_in_pixel
+    }
+
+    /// The resolved (non-MSAA) main target texture, in [`Self::MAIN_TARGET_COLOR_FORMAT`]
+    /// (sRGB-tagged).
+    ///
+    /// [`Self::composite`] is the only other way to get this view's result out,
+    /// but it always writes through `composite.wgsl`'s unmultiply/gamma-encode/premultiply
+    /// step and into a render target format fixed by `RenderContext::output_format_color()`.
+    /// An embedder that wants to combine several views' output by blending them directly into
+    /// an sRGB-tagged destination (so the GPU's own sRGB decode/encode does the linear blend
+    /// math, matching what already happens once inside a single view's main target) has no way
+    /// to reach the still-linear-mixed content before that gamma round-trip. This accessor is
+    /// that read-only seat; it does not change what [`Self::draw`] or [`Self::composite`] do.
+    pub fn main_target(&self) -> &GpuTexture {
+        &self.setup.main_target_resolved
     }
 
     pub fn queue_draw(
@@ -749,6 +909,23 @@ impl ViewBuilder {
         ctx: &RenderContext,
         clear_color: Rgba,
     ) -> Result<wgpu::CommandBuffer, PoolError> {
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(self.setup.name.clone().get()),
+            });
+        self.draw_into(ctx, clear_color, &mut encoder)?;
+        Ok(encoder.finish())
+    }
+
+    /// [`Self::draw`] into the caller's encoder, so an embedder recording many
+    /// views (and passes between them) finishes one encoder per frame instead of one per view.
+    pub fn draw_into(
+        &mut self,
+        ctx: &RenderContext,
+        clear_color: Rgba,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<(), PoolError> {
         re_tracing::profile_function!();
 
         let setup = &self.setup;
@@ -764,12 +941,6 @@ impl ViewBuilder {
 
         // Prepare the drawables for drawing!
         self.draw_phase_manager.sort_drawables(ctx.renderers());
-
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(setup.name.clone().get()),
-            });
 
         {
             re_tracing::profile_scope!("main target pass");
@@ -830,9 +1001,7 @@ impl ViewBuilder {
 
         // Provide depth buffer reads iff needed.
         let scene_depth_bind_group = if reads_mainphase_depth_buffer {
-            let depth_texture = self
-                .depth_resolve_processor
-                .resolve(&mut encoder, &pipelines)?;
+            let depth_texture = self.depth_resolve_processor.resolve(encoder, &pipelines)?;
             Some(ctx.gpu_resources.bind_groups.alloc(
                 &ctx.device,
                 &ctx.gpu_resources,
@@ -882,7 +1051,7 @@ impl ViewBuilder {
 
         if let Some(picking_processor) = &self.picking_processor {
             {
-                let mut pass = picking_processor.begin_render_pass(&setup.name, &mut encoder);
+                let mut pass = picking_processor.begin_render_pass(&setup.name, encoder);
                 // The picking processor supplies group 0 with its cropped camera.
                 self.draw_phase_manager.draw(
                     ctx.renderers(),
@@ -892,7 +1061,7 @@ impl ViewBuilder {
                     &mut pass,
                 );
             }
-            match picking_processor.end_render_pass(&mut encoder, &pipelines) {
+            match picking_processor.end_render_pass(encoder, &pipelines) {
                 Err(PickingLayerError::ResourcePoolError(err)) => {
                     return Err(err);
                 }
@@ -907,7 +1076,7 @@ impl ViewBuilder {
             re_tracing::profile_scope!("outlines");
             {
                 re_tracing::profile_scope!("outline mask pass");
-                let mut pass = outline_mask_processor.start_mask_render_pass(&mut encoder);
+                let mut pass = outline_mask_processor.start_mask_render_pass(encoder);
                 pass.set_bind_group(0, &setup.bind_group_0, &[]);
                 self.draw_phase_manager.draw(
                     ctx.renderers(),
@@ -924,12 +1093,12 @@ impl ViewBuilder {
                     &mut pass,
                 );
             }
-            outline_mask_processor.compute_outlines(&pipelines, &mut encoder)?;
+            outline_mask_processor.compute_outlines(&pipelines, encoder)?;
         }
 
         if let Some(screenshot_processor) = &self.screenshot_processor {
             {
-                let mut pass = screenshot_processor.begin_render_pass(&setup.name, &mut encoder);
+                let mut pass = screenshot_processor.begin_render_pass(&setup.name, encoder);
                 pass.set_bind_group(0, &setup.bind_group_0, &[]);
                 self.draw_phase_manager.draw(
                     ctx.renderers(),
@@ -939,7 +1108,7 @@ impl ViewBuilder {
                     &mut pass,
                 );
             }
-            match screenshot_processor.end_render_pass(&mut encoder) {
+            match screenshot_processor.end_render_pass(encoder) {
                 Ok(()) => {}
                 Err(err) => {
                     re_log::warn_once!("Failed to schedule screenshot data readback: {err}");
@@ -947,7 +1116,7 @@ impl ViewBuilder {
             }
         }
 
-        Ok(encoder.finish())
+        Ok(())
     }
 
     /// Schedules the taking of a screenshot.

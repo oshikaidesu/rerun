@@ -369,6 +369,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     if frame.deterministic_rendering == 1 {
         coverage = step(0.5, coverage);
     }
+    coverage *= near_fade(in.position_world);
 
     // As per benchmarking performed on point_cloud.wgsl, this is likely a pessimization on tile based GPUs.
     // (this has not been independently confirmed for the line rendering, but it's almost certainly the same here)

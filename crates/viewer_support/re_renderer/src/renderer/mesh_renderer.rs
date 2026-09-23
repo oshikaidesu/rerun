@@ -10,22 +10,21 @@ use std::sync::Arc;
 use enumset::EnumSet;
 use smallvec::smallvec;
 
+use super::mesh_program::{MeshProgram, MeshProgramDesc};
 use super::{DrawData, DrawError, RenderContext, Renderer};
-use crate::draw_phases::{DrawPhase, OutlineMaskProcessor};
+use crate::draw_phases::DrawPhase;
+use crate::mesh::GpuMesh;
 use crate::mesh::gpu_data::MaterialUniformBuffer;
-use crate::mesh::{GpuMesh, mesh_vertices};
 use crate::renderer::{DrawDataDrawable, DrawInstruction, DrawableCollectionViewInfo};
-use crate::view_builder::ViewBuilder;
 use crate::wgpu_resources::{
-    BindGroupLayoutDesc, BufferDesc, GpuBindGroupLayoutHandle, GpuBuffer, GpuRenderPipelineHandle,
-    GpuRenderPipelinePoolAccessor, PipelineLayoutDesc, RenderPipelineDesc,
+    BindGroupDesc, BindGroupLayoutDesc, BufferDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
+    GpuBuffer, GpuPipelineLayoutHandle, GpuRenderPipelinePoolAccessor, PipelineLayoutDesc,
 };
 use crate::{
     Color32, CpuWriteGpuReadError, DrawableCollector, OutlineMaskPreference, PickingLayerId,
-    PickingLayerProcessor, include_shader_module,
 };
 
-mod gpu_data {
+pub(super) mod gpu_data {
     use ecolor::Color32;
 
     use crate::mesh::mesh_vertices;
@@ -43,13 +42,12 @@ mod gpu_data {
         pub world_from_mesh_row_1: [f32; 4],
         pub world_from_mesh_row_2: [f32; 4],
 
-        pub world_from_mesh_normal_row_0: [f32; 3],
-        pub world_from_mesh_normal_row_1: [f32; 3],
-        pub world_from_mesh_normal_row_2: [f32; 3],
-
         pub additive_tint: Color32,
 
         pub picking_layer_id: [u32; 4],
+
+        /// 24 floats the program's hooks read. See `GpuMeshInstance::params`.
+        pub params: [[f32; 4]; 6],
 
         // Need only the first two bytes, but we want to keep everything aligned to at least 4 bytes.
         pub outline_mask_ids: [u8; 4],
@@ -69,15 +67,19 @@ mod gpu_data {
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
                         wgpu::VertexFormat::Float32x4,
-                        // Transposed inverse mesh transform.
-                        wgpu::VertexFormat::Float32x3,
-                        wgpu::VertexFormat::Float32x3,
-                        wgpu::VertexFormat::Float32x3,
                         // Tint color
                         wgpu::VertexFormat::Unorm8x4,
                         // Picking id.
                         // Again this adds overhead for non-picking passes, more this time. Consider moving this elsewhere.
                         wgpu::VertexFormat::Uint32x4,
+                        // Hook params (6 x vec4f). 16 vertex attribute locations is the floor of what wgpu
+                        // guarantees; the normal transform is derived in the vertex shader to make room.
+                        wgpu::VertexFormat::Float32x4,
+                        wgpu::VertexFormat::Float32x4,
+                        wgpu::VertexFormat::Float32x4,
+                        wgpu::VertexFormat::Float32x4,
+                        wgpu::VertexFormat::Float32x4,
+                        wgpu::VertexFormat::Float32x4,
                         // Outline mask.
                         // This adds a tiny bit of overhead to all instances during non-outline pass, but the alternative is having yet another vertex buffer.
                         wgpu::VertexFormat::Uint8x2,
@@ -110,6 +112,15 @@ struct MeshBatch {
 
     /// Position of the batch in world space, used for distance sorting.
     position: glam::Vec3A,
+
+    /// See [`DrawDataDrawable::layer_sort_key`]. Only transparent batches (one instance each) carry one.
+    layer_sort_key: i32,
+
+    /// See [`DrawDataDrawable::secondary_sort_key`].
+    secondary_sort_key: f32,
+
+    /// Shader variant; `None` is the renderer's default.
+    program: Option<Arc<MeshProgram>>,
 }
 
 #[derive(Clone)]
@@ -119,6 +130,21 @@ pub struct MeshDrawData {
     // instance range on every instanced draw call!
     instance_buffer: Option<GpuBuffer>,
     batches: Vec<MeshBatch>,
+    /// World-space cut for every instance of this draw data (group 2).
+    clip_bind_group: Option<GpuBindGroup>,
+    source_instances: Arc<[(usize, glam::Vec3A)]>,
+}
+
+mod clip_gpu_data {
+    use crate::wgpu_buffer_types;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    pub struct ClipUniformBuffer {
+        pub plane: wgpu_buffer_types::Vec4,
+        pub cap: wgpu_buffer_types::U32RowPadded,
+        pub _end_padding: [wgpu_buffer_types::PaddingRow; 16 - 2],
+    }
 }
 
 impl DrawData for MeshDrawData {
@@ -132,7 +158,9 @@ impl DrawData for MeshDrawData {
         for (batch_idx, batch) in self.batches.iter().enumerate() {
             collector.add_drawable_for_phase(
                 batch.draw_phase,
-                DrawDataDrawable::from_world_position(view_info, batch.position, batch_idx as _),
+                DrawDataDrawable::from_world_position(view_info, batch.position, batch_idx as _)
+                    .with_layer_sort_key(batch.layer_sort_key)
+                    .with_secondary_sort_key(batch.secondary_sort_key),
             );
         }
     }
@@ -159,6 +187,12 @@ pub struct GpuMeshInstance {
     /// Controls face culling for this instance.
     /// `None` means no culling (show both faces), matching `wgpu::PrimitiveState::cull_mode`.
     pub cull_mode: Option<wgpu::Face>,
+
+    /// Shader variant drawing this instance; `None` is the renderer's default (matte, no field).
+    pub program: Option<Arc<MeshProgram>>,
+
+    /// 24 floats read by the program's hooks (`FieldIn::params` / `SurfaceIn::params`), in vec4 groups.
+    pub params: [f32; 24],
 }
 
 impl GpuMeshInstance {
@@ -171,6 +205,8 @@ impl GpuMeshInstance {
             outline_mask_ids: OutlineMaskPreference::NONE,
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
+            program: None,
+            params: [0.0; 24],
         }
     }
 }
@@ -181,6 +217,7 @@ impl GpuMeshInstance {
 struct BatchKey {
     mesh_ptr: *const GpuMesh,
     cull_mode: Option<wgpu::Face>,
+    program_ptr: *const MeshProgram,
 }
 
 impl PartialOrd for BatchKey {
@@ -194,6 +231,7 @@ impl Ord for BatchKey {
         let Self {
             mesh_ptr,
             cull_mode,
+            program_ptr,
         } = self;
 
         fn face_to_u32(face: Option<wgpu::Face>) -> u32 {
@@ -209,6 +247,7 @@ impl Ord for BatchKey {
         mesh_ptr
             .cmp(&other.mesh_ptr)
             .then_with(|| face_to_u32(*cull_mode).cmp(&face_to_u32(other.cull_mode)))
+            .then_with(|| program_ptr.cmp(&other.program_ptr))
     }
 }
 
@@ -227,14 +266,75 @@ impl MeshDrawData {
         ctx: &RenderContext,
         instances: &[GpuMeshInstance],
     ) -> Result<Self, CpuWriteGpuReadError> {
+        Self::new_clipped(ctx, instances, crate::ClipPlane::NONE)
+    }
+
+    /// Like [`Self::new`], with a world-space cut applied to every instance.
+    pub fn new_clipped(
+        ctx: &RenderContext,
+        instances: &[GpuMeshInstance],
+        clip: crate::ClipPlane,
+    ) -> Result<Self, CpuWriteGpuReadError> {
+        Self::new_layered(ctx, instances, clip, &[])
+    }
+
+    /// Like [`Self::new_clipped`], with a 2D layer per instance (see [`DrawDataDrawable::layer_sort_key`]).
+    /// Missing keys are layer 0.
+    pub fn new_layered(
+        ctx: &RenderContext,
+        instances: &[GpuMeshInstance],
+        clip: crate::ClipPlane,
+        layer_sort_keys: &[i32],
+    ) -> Result<Self, CpuWriteGpuReadError> {
+        let orders: Vec<_> = layer_sort_keys
+            .iter()
+            .map(|&layer| super::DrawOrder {
+                layer,
+                ..Default::default()
+            })
+            .collect();
+        Self::new_ordered(ctx, instances, clip, &orders)
+    }
+
+    /// Like [`Self::new_clipped`], with a [`super::DrawOrder`] per instance. Missing orders are the default.
+    pub fn new_ordered(
+        ctx: &RenderContext,
+        instances: &[GpuMeshInstance],
+        clip: crate::ClipPlane,
+        orders: &[super::DrawOrder],
+    ) -> Result<Self, CpuWriteGpuReadError> {
         re_tracing::profile_function!();
 
         if instances.is_empty() {
             return Ok(Self {
                 batches: Vec::new(),
                 instance_buffer: None,
+                clip_bind_group: None,
+                source_instances: Arc::from([]),
             });
         }
+
+        let clip_bind_group = {
+            let uniform = clip_gpu_data::ClipUniformBuffer {
+                plane: clip.gpu().into(),
+                cap: u32::from(clip.cap).into(),
+                _end_padding: Default::default(),
+            };
+            let binding = crate::allocator::create_and_fill_uniform_buffer(
+                ctx,
+                "MeshDrawData::clip".into(),
+                uniform,
+            );
+            ctx.gpu_resources.bind_groups.alloc(
+                &ctx.device,
+                &ctx.gpu_resources,
+                &BindGroupDesc {
+                    label: "MeshDrawData::clip_bind_group".into(),
+                    entries: smallvec![binding],
+                    layout: clip_bind_group_layout(ctx),
+                },
+            )
+        };
 
         // Group by mesh to facilitate instancing.
 
@@ -257,17 +357,22 @@ impl MeshDrawData {
         // but since it uses the pointer address as part of the key,
         // it will still change if we run the app multiple times.
         let mut instances_by_batch_key: BTreeMap<BatchKey, Vec<_>> = BTreeMap::new();
-        for instance in instances {
+        for (source_index, instance) in instances.iter().enumerate() {
             instances_by_batch_key
                 .entry(BatchKey {
                     mesh_ptr: Arc::as_ptr(&instance.gpu_mesh),
                     cull_mode: instance.cull_mode,
+                    program_ptr: instance
+                        .program
+                        .as_ref()
+                        .map_or(std::ptr::null(), Arc::as_ptr),
                 })
                 .or_insert_with(|| Vec::with_capacity(instances.len()))
-                .push((instance, EnumSet::<DrawPhase>::new())); // Draw phase is filled out later.
+                .push((source_index, instance, EnumSet::<DrawPhase>::new())); // Draw phase is filled out later.
         }
 
         let mut batches = Vec::new();
+        let mut source_instances = Vec::with_capacity(instances.len());
         {
             let mut instance_buffer_staging = ctx
                 .cpu_write_gpu_read_belt
@@ -283,8 +388,9 @@ impl MeshDrawData {
                 let Some(first_instance) = instances.first() else {
                     continue;
                 };
-                let first_instance = first_instance.0;
+                let first_instance = first_instance.1;
                 let mesh = first_instance.gpu_mesh.clone();
+                let program = first_instance.program.clone();
                 let mesh_center = glam::Vec3A::from(mesh.bbox.center());
 
                 // TODO(andreas): precompute these two.
@@ -299,27 +405,25 @@ impl MeshDrawData {
 
                 // Any instances participating in the opaque & outline mask drawphases can be batched together.
                 // For that, we need continuous runs, ideally all of the instances together in a single run.
-                for (instance, phases) in &mut instances {
+                for (_, instance, phases) in &mut instances {
                     *phases = instance_draw_phases(
                         instance,
                         any_material_transparent,
                         all_materials_transparent,
                     );
                 }
-                instances.sort_by_key(|(_instance, phases)| *phases);
+                instances.sort_by_key(|(_, _instance, phases)| *phases);
 
                 // Add the instances to the instance buffer.
-                for (i, (instance, phases)) in instances.iter().enumerate() {
+                for (i, (source_index, instance, phases)) in instances.iter().enumerate() {
+                    source_instances.push((
+                        *source_index,
+                        instance.world_from_mesh.transform_point3a(mesh_center),
+                    ));
                     let world_from_mesh_mat3 = instance.world_from_mesh.matrix3;
                     // If the matrix is not invertible the draw result is likely invalid as well.
                     // However, at this point it's really hard to bail out!
                     // Also, by skipping drawing here, we'd make the result worse as there would be no mesh draw calls that could be debugged.
-                    let world_from_mesh_normal =
-                        if instance.world_from_mesh.matrix3.determinant() == 0.0 {
-                            glam::Mat3A::ZERO
-                        } else {
-                            instance.world_from_mesh.matrix3.inverse().transpose()
-                        };
                     instance_buffer_staging.push(gpu_data::InstanceData {
                         world_from_mesh_row_0: world_from_mesh_mat3
                             .row(0)
@@ -333,15 +437,15 @@ impl MeshDrawData {
                             .row(2)
                             .extend(instance.world_from_mesh.translation.z)
                             .to_array(),
-                        world_from_mesh_normal_row_0: world_from_mesh_normal.row(0).to_array(),
-                        world_from_mesh_normal_row_1: world_from_mesh_normal.row(1).to_array(),
-                        world_from_mesh_normal_row_2: world_from_mesh_normal.row(2).to_array(),
                         additive_tint: instance.additive_tint,
                         outline_mask_ids: instance
                             .outline_mask_ids
                             .0
                             .map_or([0, 0, 0, 0], |mask| [mask[0], mask[1], 0, 0]),
                         picking_layer_id: instance.picking_layer_id.into(),
+                        params: std::array::from_fn(|g| {
+                            std::array::from_fn(|i| instance.params[g * 4 + i])
+                        }),
                     })?;
 
                     // Transparent instances can not be batched.
@@ -353,7 +457,18 @@ impl MeshDrawData {
                             draw_phase: DrawPhase::Transparent,
                             has_transparent_tint: !instance.additive_tint.is_opaque(),
                             cull_mode: batch_key.cull_mode,
-                            position: instance.world_from_mesh.transform_point3a(mesh_center),
+                            position: orders
+                                .get(*source_index)
+                                .and_then(|o| o.position)
+                                .unwrap_or_else(|| {
+                                    instance.world_from_mesh.transform_point3a(mesh_center)
+                                }),
+                            layer_sort_key: orders.get(*source_index).map_or(0, |o| o.layer),
+                            secondary_sort_key: orders
+                                .get(*source_index)
+                                .and_then(|o| o.secondary)
+                                .unwrap_or(0.0),
+                            program: program.clone(),
                         });
                     }
                 }
@@ -363,12 +478,12 @@ impl MeshDrawData {
                 for phase in [DrawPhase::Opaque, DrawPhase::OutlineMask] {
                     let mut instance_start = num_processed_instances;
 
-                    for chunk in instances.chunk_by(|(_, phases_a), (_, phases_b)| {
+                    for chunk in instances.chunk_by(|(_, _, phases_a), (_, _, phases_b)| {
                         phases_a.contains(phase) == phases_b.contains(phase)
                     }) {
                         let num_instances = chunk.len() as u32;
 
-                        if chunk[0].1.contains(phase) {
+                        if chunk[0].2.contains(phase) {
                             batches.push(MeshBatch {
                                 mesh: mesh.clone(),
                                 instance_range: Span::from_start_len(instance_start, num_instances),
@@ -376,7 +491,10 @@ impl MeshDrawData {
                                 has_transparent_tint: false,
                                 cull_mode: batch_key.cull_mode,
                                 // Ordering isn't super important, so for many instances just pick the first as representative.
-                                position: chunk[0].0.world_from_mesh.transform_point3a(mesh_center),
+                                position: chunk[0].1.world_from_mesh.transform_point3a(mesh_center),
+                                layer_sort_key: 0,
+                                secondary_sort_key: 0.0,
+                                program: program.clone(),
                             });
                         }
 
@@ -399,6 +517,9 @@ impl MeshDrawData {
                     position: first_instance
                         .world_from_mesh
                         .transform_point3a(mesh_center),
+                    layer_sort_key: 0,
+                    secondary_sort_key: 0.0,
+                    program: program.clone(),
                 });
 
                 num_processed_instances += instances.len() as u32;
@@ -414,27 +535,71 @@ impl MeshDrawData {
         Ok(Self {
             batches,
             instance_buffer: Some(instance_buffer),
+            clip_bind_group: Some(clip_bind_group),
+            source_instances: source_instances.into(),
         })
     }
 }
 
+impl MeshDrawData {
+    /// Select original input instances without rebuilding or uploading the GPU buffer.
+    /// The predicate uses the index in the slice passed to `new_clipped`.
+    pub fn select_source_instances(&self, include: impl Fn(usize) -> bool) -> Self {
+        let mut batches = Vec::new();
+        for batch in &self.batches {
+            let selected = |packed: u32| include(self.source_instances[packed as usize].0);
+            let Some(first) = batch.instance_range.range().find(|&i| selected(i)) else {
+                continue;
+            };
+            let position = self.source_instances[first as usize].1;
+            let mut start = None;
+            for i in batch.instance_range.start..=batch.instance_range.end() {
+                if i < batch.instance_range.end() && selected(i) {
+                    start.get_or_insert(i);
+                } else if let Some(begin) = start.take() {
+                    let mut subset = batch.clone();
+                    subset.instance_range = re_span::Span::from_start_end(begin, i);
+                    subset.position = position;
+                    batches.push(subset);
+                }
+            }
+        }
+        Self {
+            instance_buffer: self.instance_buffer.clone(),
+            clip_bind_group: self.clip_bind_group.clone(),
+            source_instances: self.source_instances.clone(),
+            batches,
+        }
+    }
+}
+
 pub struct MeshRenderer {
-    rp_shaded: GpuRenderPipelineHandle,
-    rp_shaded_cull_back: GpuRenderPipelineHandle,
-    rp_shaded_cull_front: GpuRenderPipelineHandle,
-
-    rp_shaded_alpha_blended_cull_back: GpuRenderPipelineHandle,
-    rp_shaded_alpha_blended_cull_front: GpuRenderPipelineHandle,
-
-    rp_picking_layer: GpuRenderPipelineHandle,
-    rp_picking_layer_cull_back: GpuRenderPipelineHandle,
-    rp_picking_layer_cull_front: GpuRenderPipelineHandle,
-
-    rp_outline_mask: GpuRenderPipelineHandle,
-    rp_outline_mask_cull_back: GpuRenderPipelineHandle,
-    rp_outline_mask_cull_front: GpuRenderPipelineHandle,
-
+    default_program: Arc<MeshProgram>,
     pub bind_group_layout: GpuBindGroupLayoutHandle,
+    pub(crate) pipeline_layout: GpuPipelineLayoutHandle,
+}
+
+/// Group 2 of the mesh pipelines: the draw data's world-space cut.
+fn clip_bind_group_layout(ctx: &RenderContext) -> GpuBindGroupLayoutHandle {
+    ctx.gpu_resources.bind_group_layouts.get_or_create(
+        &ctx.device,
+        &BindGroupLayoutDesc {
+            label: "MeshRenderer::clip_bind_group_layout".into(),
+            entries: vec![wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: (std::mem::size_of::<clip_gpu_data::ClipUniformBuffer>()
+                        as u64)
+                        .try_into()
+                        .ok(),
+                },
+                count: None,
+            }],
+        },
+    )
 }
 
 impl Renderer for MeshRenderer {
@@ -442,8 +607,6 @@ impl Renderer for MeshRenderer {
 
     fn create_renderer(ctx: &RenderContext) -> Self {
         re_tracing::profile_function!();
-
-        let render_pipelines = &ctx.gpu_resources.render_pipelines;
 
         let bind_group_layout = ctx.gpu_resources.bind_group_layouts.get_or_create(
             &ctx.device,
@@ -462,7 +625,8 @@ impl Renderer for MeshRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        // The vertex stage reads `field_at_texcoord`.
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -472,179 +636,47 @@ impl Renderer for MeshRenderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        // Quadratic outlines of a `CurveFill`, two texels per curve (a data texture).
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             },
         );
+        let clip_bind_group_layout = clip_bind_group_layout(ctx);
         let pipeline_layout = ctx.gpu_resources.pipeline_layouts.get_or_create(
             ctx,
             &PipelineLayoutDesc {
                 label: "MeshRenderer::pipeline_layout".into(),
-                entries: vec![ctx.global_bindings.layout, bind_group_layout],
+                entries: vec![
+                    ctx.global_bindings.layout,
+                    bind_group_layout,
+                    clip_bind_group_layout,
+                ],
             },
         );
 
-        let shader_module = ctx.gpu_resources.shader_modules.get_or_create(
+        let default_program = MeshProgram::with_layout(
             ctx,
-            &include_shader_module!("../../shader/instanced_mesh.wgsl"),
-        );
-
-        // We always assume counter-clockwise faces as front.
-        let front_face = wgpu::FrontFace::Ccw;
-
-        let primitive = wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            cull_mode: None,
-            front_face,
-            ..Default::default()
-        };
-        // Put instance vertex buffer on slot 0 since it doesn't change for several draws.
-        let vertex_buffers: smallvec::SmallVec<[_; 4]> = std::iter::chain(
-            std::iter::once(gpu_data::InstanceData::vertex_buffer_layout()),
-            mesh_vertices::vertex_buffer_layouts(),
-        )
-        .collect();
-
-        let rp_shaded_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_shaded".into(),
             pipeline_layout,
-            vertex_entrypoint: "vs_main".into(),
-            vertex_handle: shader_module,
-            fragment_entrypoint: "fs_main_shaded".into(),
-            fragment_handle: shader_module,
-            vertex_buffers,
-            render_targets: smallvec![Some(ViewBuilder::MAIN_TARGET_COLOR_FORMAT.into())],
-            primitive,
-            depth_stencil: Some(ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE),
-            multisample: ViewBuilder::main_target_default_msaa_state(ctx.render_config(), false),
-        };
-        let rp_shaded = render_pipelines.get_or_create(ctx, &rp_shaded_desc);
-        let rp_shaded_cull_back = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_shaded_cull_back".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..primitive
-                },
-                ..rp_shaded_desc.clone()
+            MeshProgramDesc {
+                label: "default".into(),
+                ..Default::default()
             },
-        );
-        let rp_shaded_cull_front = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_shaded_cull_front".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Front),
-                    ..primitive
-                },
-                ..rp_shaded_desc.clone()
-            },
-        );
-
-        let rp_shaded_alpha_blended_cull_back_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_shaded_alpha_blended_front".into(),
-            render_targets: smallvec![Some(wgpu::ColorTargetState {
-                format: ViewBuilder::MAIN_TARGET_COLOR_FORMAT,
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            depth_stencil: Some(ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE_NO_WRITE),
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Back),
-                ..primitive
-            },
-            ..rp_shaded_desc.clone()
-        };
-        let rp_shaded_alpha_blended_cull_front_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_shaded_alpha_blended_back".into(),
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Front),
-                ..primitive
-            },
-            ..rp_shaded_alpha_blended_cull_back_desc.clone()
-        };
-        let rp_shaded_alpha_blended_cull_back =
-            render_pipelines.get_or_create(ctx, &rp_shaded_alpha_blended_cull_back_desc);
-        let rp_shaded_alpha_blended_cull_front =
-            render_pipelines.get_or_create(ctx, &rp_shaded_alpha_blended_cull_front_desc);
-
-        let rp_picking_layer_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_picking_layer".into(),
-            fragment_entrypoint: "fs_main_picking_layer".into(),
-            render_targets: smallvec![Some(PickingLayerProcessor::PICKING_LAYER_FORMAT.into())],
-            depth_stencil: PickingLayerProcessor::PICKING_LAYER_DEPTH_STATE,
-            multisample: PickingLayerProcessor::PICKING_LAYER_MSAA_STATE,
-            ..rp_shaded_desc.clone()
-        };
-        let rp_picking_layer = render_pipelines.get_or_create(ctx, &rp_picking_layer_desc);
-        let rp_picking_layer_cull_back = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_picking_layer_cull_back".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..primitive
-                },
-                ..rp_picking_layer_desc.clone()
-            },
-        );
-        let rp_picking_layer_cull_front = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_picking_layer_cull_front".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Front),
-                    ..primitive
-                },
-                ..rp_picking_layer_desc
-            },
-        );
-
-        let rp_outline_mask_desc = RenderPipelineDesc {
-            label: "MeshRenderer::rp_outline_mask".into(),
-            fragment_entrypoint: "fs_main_outline_mask".into(),
-            render_targets: smallvec![Some(OutlineMaskProcessor::MASK_FORMAT.into())],
-            depth_stencil: OutlineMaskProcessor::MASK_DEPTH_STATE,
-            multisample: OutlineMaskProcessor::mask_default_msaa_state(ctx.device_caps().tier),
-            ..rp_shaded_desc
-        };
-        let rp_outline_mask = render_pipelines.get_or_create(ctx, &rp_outline_mask_desc);
-        let rp_outline_mask_cull_back = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_outline_mask_cull_back".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..primitive
-                },
-                ..rp_outline_mask_desc.clone()
-            },
-        );
-        let rp_outline_mask_cull_front = render_pipelines.get_or_create(
-            ctx,
-            &RenderPipelineDesc {
-                label: "MeshRenderer::rp_outline_mask_cull_front".into(),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Front),
-                    ..primitive
-                },
-                ..rp_outline_mask_desc
-            },
-        );
+        )
+        .expect("the default mesh program composes from embedded shaders");
 
         Self {
-            rp_shaded,
-            rp_shaded_cull_back,
-            rp_shaded_cull_front,
-            rp_shaded_alpha_blended_cull_back,
-            rp_shaded_alpha_blended_cull_front,
-            rp_picking_layer,
-            rp_picking_layer_cull_back,
-            rp_picking_layer_cull_front,
-            rp_outline_mask,
-            rp_outline_mask_cull_back,
-            rp_outline_mask_cull_front,
+            default_program: Arc::new(default_program),
             bind_group_layout,
+            pipeline_layout,
         }
     }
 
@@ -665,121 +697,151 @@ impl Renderer for MeshRenderer {
             _ => unreachable!("We were called on a phase we weren't subscribed to: {phase:?}"),
         }
 
-        for DrawInstruction {
-            draw_data,
-            drawables,
-        } in draw_instructions
-        {
-            let Some(instance_buffer) = &draw_data.instance_buffer else {
-                continue; // Instance buffer was empty.
-            };
-            pass.set_vertex_buffer(0, instance_buffer.slice(..));
-
-            for drawable in *drawables {
-                let mesh_batch = &draw_data.batches[drawable.draw_data_payload as usize];
-
-                let vertex_buffer_combined = &mesh_batch.mesh.vertex_buffer_combined;
-                let index_buffer = &mesh_batch.mesh.index_buffer;
-
-                pass.set_vertex_buffer(
-                    1,
-                    vertex_buffer_combined
-                        .slice(mesh_batch.mesh.vertex_buffer_positions_range.range()),
-                );
-                pass.set_vertex_buffer(
-                    2,
-                    vertex_buffer_combined
-                        .slice(mesh_batch.mesh.vertex_buffer_colors_range.range()),
-                );
-                pass.set_vertex_buffer(
-                    3,
-                    vertex_buffer_combined
-                        .slice(mesh_batch.mesh.vertex_buffer_normals_range.range()),
-                );
-                pass.set_vertex_buffer(
-                    4,
-                    vertex_buffer_combined
-                        .slice(mesh_batch.mesh.vertex_buffer_texcoord_range.range()),
-                );
-                pass.set_index_buffer(
-                    index_buffer.slice(mesh_batch.mesh.index_buffer_range.range()),
-                    wgpu::IndexFormat::Uint32,
-                );
-
-                // Set per-batch pipeline based on cull mode.
-                // For the transparent phase this is done per-material below.
-                if phase != DrawPhase::Transparent {
-                    let pipeline = match (phase, mesh_batch.cull_mode) {
-                        (DrawPhase::Opaque, None) => self.rp_shaded,
-                        (DrawPhase::Opaque, Some(wgpu::Face::Back)) => self.rp_shaded_cull_back,
-                        (DrawPhase::Opaque, Some(wgpu::Face::Front)) => self.rp_shaded_cull_front,
-                        (DrawPhase::PickingLayer, None) => self.rp_picking_layer,
-                        (DrawPhase::PickingLayer, Some(wgpu::Face::Back)) => {
-                            self.rp_picking_layer_cull_back
-                        }
-                        (DrawPhase::PickingLayer, Some(wgpu::Face::Front)) => {
-                            self.rp_picking_layer_cull_front
-                        }
-                        (DrawPhase::OutlineMask, None) => self.rp_outline_mask,
-                        (DrawPhase::OutlineMask, Some(wgpu::Face::Back)) => {
-                            self.rp_outline_mask_cull_back
-                        }
-                        (DrawPhase::OutlineMask, Some(wgpu::Face::Front)) => {
-                            self.rp_outline_mask_cull_front
-                        }
-                        _ => unreachable!(),
-                    };
-                    pass.set_pipeline(render_pipelines.get(pipeline)?);
+        // Opaque meshes go twice: depth only, then the material at the surviving depth. The shaded
+        // fragment can discard (the clip plane), which turns off hidden-surface removal; without the
+        // pre-pass every overlapping surface would be shaded in full. Ties keep "later wins"
+        // (GreaterEqual, then Equal), so the result is the same.
+        let steps: &[Option<bool>] = if phase == DrawPhase::Opaque {
+            &[Some(true), Some(false)]
+        } else {
+            &[None]
+        };
+        for &prepass in steps {
+            for DrawInstruction {
+                draw_data,
+                drawables,
+            } in draw_instructions
+            {
+                let Some(instance_buffer) = &draw_data.instance_buffer else {
+                    continue; // Instance buffer was empty.
+                };
+                pass.set_vertex_buffer(0, instance_buffer.slice(..));
+                if let Some(clip) = &draw_data.clip_bind_group {
+                    pass.set_bind_group(2, clip, &[]);
                 }
 
-                for material in &mesh_batch.mesh.materials {
-                    if phase == DrawPhase::Transparent
-                        && !material.has_transparency
-                        && !mesh_batch.has_transparent_tint
-                    {
-                        // Skip if this material is to be handled by opaque drawables.
-                        continue;
+                for drawable in *drawables {
+                    let mesh_batch = &draw_data.batches[drawable.draw_data_payload as usize];
+
+                    let vertex_buffer_combined = &mesh_batch.mesh.vertex_buffer_combined;
+                    let index_buffer = &mesh_batch.mesh.index_buffer;
+
+                    pass.set_vertex_buffer(
+                        1,
+                        vertex_buffer_combined
+                            .slice(mesh_batch.mesh.vertex_buffer_positions_range.range()),
+                    );
+                    pass.set_vertex_buffer(
+                        2,
+                        vertex_buffer_combined
+                            .slice(mesh_batch.mesh.vertex_buffer_colors_range.range()),
+                    );
+                    pass.set_vertex_buffer(
+                        3,
+                        vertex_buffer_combined
+                            .slice(mesh_batch.mesh.vertex_buffer_normals_range.range()),
+                    );
+                    pass.set_vertex_buffer(
+                        4,
+                        vertex_buffer_combined
+                            .slice(mesh_batch.mesh.vertex_buffer_texcoord_range.range()),
+                    );
+                    pass.set_index_buffer(
+                        index_buffer.slice(mesh_batch.mesh.index_buffer_range.range()),
+                        wgpu::IndexFormat::Uint32,
+                    );
+
+                    let program: &MeshProgram = mesh_batch
+                        .program
+                        .as_deref()
+                        .unwrap_or(&self.default_program);
+
+                    // Set per-batch pipeline based on cull mode.
+                    // For the transparent phase this is done per-material below.
+                    if phase != DrawPhase::Transparent {
+                        let pipeline = match (phase, mesh_batch.cull_mode) {
+                            (DrawPhase::Opaque, cull) => {
+                                let index = match cull {
+                                    None => 0,
+                                    Some(wgpu::Face::Back) => 1,
+                                    Some(wgpu::Face::Front) => 2,
+                                };
+                                if prepass == Some(true) {
+                                    program.rp_depth_prepass[index]
+                                } else {
+                                    program.rp_shaded_at_depth[index]
+                                }
+                            }
+                            (DrawPhase::PickingLayer, None) => program.rp_picking_layer,
+                            (DrawPhase::PickingLayer, Some(wgpu::Face::Back)) => {
+                                program.rp_picking_layer_cull_back
+                            }
+                            (DrawPhase::PickingLayer, Some(wgpu::Face::Front)) => {
+                                program.rp_picking_layer_cull_front
+                            }
+                            (DrawPhase::OutlineMask, None) => program.rp_outline_mask,
+                            (DrawPhase::OutlineMask, Some(wgpu::Face::Back)) => {
+                                program.rp_outline_mask_cull_back
+                            }
+                            (DrawPhase::OutlineMask, Some(wgpu::Face::Front)) => {
+                                program.rp_outline_mask_cull_front
+                            }
+                            _ => unreachable!(),
+                        };
+                        pass.set_pipeline(render_pipelines.get(pipeline)?);
                     }
-                    if phase == DrawPhase::Opaque && material.has_transparency {
-                        // Skip if this is to be handled by transparent drawables.
-                        continue;
-                    }
 
-                    pass.set_bind_group(1, &material.bind_group, &[]);
-
-                    let indices = material.index_range.range();
-                    let instances = mesh_batch.instance_range.range();
-                    if phase == DrawPhase::Transparent {
-                        match mesh_batch.cull_mode {
-                            None => {
-                                // Default two-pass: first cull front faces, then cull back faces.
-                                pass.set_pipeline(
-                                    render_pipelines
-                                        .get(self.rp_shaded_alpha_blended_cull_front)?,
-                                );
-                                pass.draw_indexed(indices.clone(), 0, instances.clone());
-
-                                pass.set_pipeline(
-                                    render_pipelines.get(self.rp_shaded_alpha_blended_cull_back)?,
-                                );
-                                pass.draw_indexed(indices, 0, instances);
-                            }
-                            Some(wgpu::Face::Back) => {
-                                pass.set_pipeline(
-                                    render_pipelines.get(self.rp_shaded_alpha_blended_cull_back)?,
-                                );
-                                pass.draw_indexed(indices, 0, instances);
-                            }
-                            Some(wgpu::Face::Front) => {
-                                pass.set_pipeline(
-                                    render_pipelines
-                                        .get(self.rp_shaded_alpha_blended_cull_front)?,
-                                );
-                                pass.draw_indexed(indices, 0, instances);
-                            }
+                    for material in &mesh_batch.mesh.materials {
+                        if phase == DrawPhase::Transparent
+                            && !material.has_transparency
+                            && !mesh_batch.has_transparent_tint
+                        {
+                            // Skip if this material is to be handled by opaque drawables.
+                            continue;
                         }
-                    } else {
-                        pass.draw_indexed(indices, 0, instances);
+                        if phase == DrawPhase::Opaque && material.has_transparency {
+                            // Skip if this is to be handled by transparent drawables.
+                            continue;
+                        }
+
+                        pass.set_bind_group(1, &material.bind_group, &[]);
+
+                        let indices = material.index_range.range();
+                        let instances = mesh_batch.instance_range.range();
+                        if phase == DrawPhase::Transparent {
+                            match mesh_batch.cull_mode {
+                                None => {
+                                    // Default two-pass: first cull front faces, then cull back faces.
+                                    pass.set_pipeline(
+                                        render_pipelines
+                                            .get(program.rp_shaded_alpha_blended_cull_front)?,
+                                    );
+                                    pass.draw_indexed(indices.clone(), 0, instances.clone());
+
+                                    pass.set_pipeline(
+                                        render_pipelines
+                                            .get(program.rp_shaded_alpha_blended_cull_back)?,
+                                    );
+                                    pass.draw_indexed(indices, 0, instances);
+                                }
+                                Some(wgpu::Face::Back) => {
+                                    pass.set_pipeline(
+                                        render_pipelines
+                                            .get(program.rp_shaded_alpha_blended_cull_back)?,
+                                    );
+                                    pass.draw_indexed(indices, 0, instances);
+                                }
+                                Some(wgpu::Face::Front) => {
+                                    pass.set_pipeline(
+                                        render_pipelines
+                                            .get(program.rp_shaded_alpha_blended_cull_front)?,
+                                    );
+                                    pass.draw_indexed(indices, 0, instances);
+                                }
+                            }
+                        } else {
+                            pass.draw_indexed(indices, 0, instances);
+                        }
                     }
                 }
             }
@@ -857,6 +919,10 @@ mod tests {
         test_mesh(
             ctx,
             smallvec![Material {
+                albedo_is_premultiplied: false,
+                albedo_is_cutout: false,
+                field_at_texcoord: false,
+                curves: None,
                 label: "opaque_material".into(),
                 index_range: Span::from_start_len(0, 3),
                 albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
@@ -870,12 +936,20 @@ mod tests {
             ctx,
             smallvec![
                 Material {
+                    albedo_is_premultiplied: false,
+                    albedo_is_cutout: false,
+                    field_at_texcoord: false,
+                    curves: None,
                     label: "opaque_material".into(),
                     index_range: Span::from_start_len(0, 3),
                     albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
                     albedo_factor: crate::Rgba::WHITE
                 },
                 Material {
+                    albedo_is_premultiplied: false,
+                    albedo_is_cutout: false,
+                    field_at_texcoord: false,
+                    curves: None,
                     label: "opaque_material".into(),
                     index_range: Span::from_start_len(0, 3),
                     albedo: ctx.texture_manager_2d.white_texture_unorm_handle().clone(),
@@ -893,6 +967,8 @@ mod tests {
             outline_mask_ids: OutlineMaskPreference::NONE,
             picking_layer_id: PickingLayerId::default(),
             cull_mode: None,
+            program: None,
+            params: [0.0; 24],
         }
     }
 
