@@ -116,32 +116,32 @@ impl GpuReadbackBuffer {
         Ok(())
     }
 
-    // TODO(andreas): Unused & untested so far!
-    //
-    // Populates the buffer with data from a buffer.
-    //
-    // Panics if the readback buffer is too small to fit the data.
-    // pub fn read_buffer(
-    //     self,
-    //     encoder: &mut wgpu::CommandEncoder,
-    //     source: &GpuBuffer,
-    //     source_offset: wgpu::BufferAddress,
-    // ) {
-    //     let copy_size = self.range_in_chunk.end - self.range_in_chunk.start;
-
-    //     // Wgpu does validation as well, but in debug mode we want to panic if the buffer doesn't fit.
-    //     debug_assert!(copy_size <= source_offset + source.size(),
-    //         "Source buffer has a size of {}, can't write {copy_size} bytes with an offset of {source_offset}!",
-    //         source.size());
-
-    //     encoder.copy_buffer_to_buffer(
-    //         source,
-    //         source_offset,
-    //         &self.chunk_buffer,
-    //         self.range_in_chunk.start,
-    //         copy_size,
-    //     );
-    // }
+    /// Populates the buffer with `copy_size` bytes of `source`, starting at `source_offset`.
+    pub fn read_buffer(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::Buffer,
+        source_offset: wgpu::BufferAddress,
+        copy_size: wgpu::BufferAddress,
+    ) -> Result<(), GpuReadbackError> {
+        if !source.usage().contains(wgpu::BufferUsages::COPY_SRC) {
+            return Err(GpuReadbackError::MissingSrcCopyUsage);
+        }
+        // Wgpu does validation as well, but in debug mode we want to panic if the buffer doesn't fit.
+        debug_assert!(
+            copy_size <= self.range_in_chunk.end - self.range_in_chunk.start,
+            "Buffer data is too large to fit into the readback buffer!"
+        );
+        encoder.copy_buffer_to_buffer(
+            source,
+            source_offset,
+            &self.chunk_buffer,
+            self.range_in_chunk.start,
+            copy_size,
+        );
+        self.range_in_chunk = (self.range_in_chunk.start + copy_size)..self.range_in_chunk.end;
+        Ok(())
+    }
 }
 
 /// Internal chunk of the staging belt.
