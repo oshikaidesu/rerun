@@ -42,6 +42,10 @@ pub struct SurfaceProgram {
     pub(crate) rp_shaded_cull_back: GpuRenderPipelineHandle,
     pub(crate) rp_shaded_cull_front: GpuRenderPipelineHandle,
 
+    /// Opaque meshes: depth first, then the material once per sample at the surviving depth.
+    pub(crate) rp_depth_prepass: [GpuRenderPipelineHandle; 3],
+    pub(crate) rp_shaded_at_depth: [GpuRenderPipelineHandle; 3],
+
     pub(crate) rp_shaded_alpha_blended_cull_back: GpuRenderPipelineHandle,
     pub(crate) rp_shaded_alpha_blended_cull_front: GpuRenderPipelineHandle,
 
@@ -251,6 +255,31 @@ impl SurfaceProgram {
             depth_stencil: Some(ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE_NO_WRITE),
             ..rp_shaded_desc.clone()
         };
+        let rp_depth_prepass_desc = RenderPipelineDesc {
+            label: label("depth_prepass"),
+            fragment_entrypoint: "fs_main_depth_only".into(),
+            render_targets: smallvec![Some(wgpu::ColorTargetState {
+                format: ViewBuilder::MAIN_TARGET_COLOR_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::empty(),
+            })],
+            ..rp_shaded_desc.clone()
+        };
+        let rp_shaded_at_depth_desc = RenderPipelineDesc {
+            label: label("shaded_at_depth"),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                depth_compare: Some(wgpu::CompareFunction::Equal),
+                depth_write_enabled: Some(false),
+                ..ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE
+            }),
+            ..rp_shaded_desc.clone()
+        };
+        let three = |base: &RenderPipelineDesc, name: &str| -> [GpuRenderPipelineHandle; 3] {
+            [None, Some(wgpu::Face::Back), Some(wgpu::Face::Front)]
+                .map(|face| render_pipelines.get_or_create(ctx, &cull(base, face, name)))
+        };
+        let rp_depth_prepass = three(&rp_depth_prepass_desc, "depth_prepass");
+        let rp_shaded_at_depth = three(&rp_shaded_at_depth_desc, "shaded_at_depth");
         let rp_picking_layer_desc = RenderPipelineDesc {
             label: label("picking_layer"),
             fragment_entrypoint: "fs_main_picking_layer".into(),
@@ -270,6 +299,8 @@ impl SurfaceProgram {
 
         Ok(Self {
             rectangle_pipelines: None,
+            rp_depth_prepass,
+            rp_shaded_at_depth,
             rp_shaded: render_pipelines.get_or_create(ctx, &rp_shaded_desc),
             rp_shaded_cull_back: render_pipelines.get_or_create(
                 ctx,

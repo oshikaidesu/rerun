@@ -91,6 +91,7 @@ pub fn load_obj_from_buffer(
             // TODO(andreas): proper material loading
             materials: smallvec![Material {
                 albedo_is_premultiplied: false,
+                albedo_is_opaque_picture: false,
                 field_anchor: false,
                 curves: None,
                 label: "default material".into(),

@@ -48,6 +48,7 @@ pub fn load_stl_from_buffer(
 
     let material = mesh::Material {
         albedo_is_premultiplied: false,
+        albedo_is_opaque_picture: false,
         field_anchor: false,
         curves: None,
         label: name.clone(),

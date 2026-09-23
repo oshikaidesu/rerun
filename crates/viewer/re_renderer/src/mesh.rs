@@ -190,6 +190,9 @@ pub struct Material {
     pub albedo_factor: Rgba,
     /// The sampled texture contains linear premultiplied RGBA, including coverage.
     pub albedo_is_premultiplied: bool,
+    /// The premultiplied picture's coverage is already the geometry's outline (an extruded layer):
+    /// the surface is an opaque volume — un-premultiplied colour, full coverage, depth-tested.
+    pub albedo_is_opaque_picture: bool,
     /// The vertex field (`motolii_field`) is evaluated at the vertex's texcoord (x, y, 0) instead of
     /// its position: a stroked path stores the centreline point there, so both sides of a line move
     /// together and the line keeps its width under the field.
@@ -288,6 +291,7 @@ pub(crate) mod gpu_data {
         Grayscale = 1,
         PremultipliedRgba = 2,
         Curves = 3,
+        OpaquePremultipliedRgba = 4,
     }
 
     /// Keep in sync with [`MaterialUniformBuffer`] in `instanced_mesh.wgsl`
@@ -412,6 +416,8 @@ impl GpuMesh {
                         material.albedo_factor,
                         if material.curves.is_some() {
                             gpu_data::TextureFormat::Curves
+                        } else if material.albedo_is_premultiplied && material.albedo_is_opaque_picture {
+                            gpu_data::TextureFormat::OpaquePremultipliedRgba
                         } else if material.albedo_is_premultiplied {
                             gpu_data::TextureFormat::PremultipliedRgba
                         } else if material.albedo.texture.format().components() == 1 {
@@ -466,7 +472,7 @@ impl GpuMesh {
 
                 // TODO(#12223): handle texture transparency
                 let is_transparent = material.curves.is_some()
-                    || material.albedo_is_premultiplied
+                    || (material.albedo_is_premultiplied && !material.albedo_is_opaque_picture)
                     || material.albedo_factor.a() < 1.0
                     || data.vertex_colors.iter().any(|color| color.0[3] < 255);
 

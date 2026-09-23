@@ -24,6 +24,7 @@ const FORMAT_RGBA: u32 = 0;
 const FORMAT_GRAYSCALE: u32 = 1;
 const FORMAT_PREMULTIPLIED_RGBA: u32 = 2;
 const FORMAT_CURVES: u32 = 3;
+const FORMAT_OPAQUE_PREMULTIPLIED_RGBA: u32 = 4;
 
 // Keep in sync with `gpu_data::MaterialUniformBuffer` in mesh.rs
 struct MaterialUniformBuffer {
@@ -156,7 +157,8 @@ struct ClipUniformBuffer {
 var<uniform> clip: ClipUniformBuffer;
 
 struct VertexOut {
-    @builtin(position)
+    // Invariant: the depth pre-pass and the shading pass must place every sample identically.
+    @builtin(position) @invariant
     position: vec4f,
 
     @location(0) @interpolate(perspective, sample)
@@ -277,6 +279,9 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
         case FORMAT_RGBA: { texture = linear_from_srgb(sample.rgb); }
         case FORMAT_GRAYSCALE: { texture = linear_from_srgb(sample.rrr); }
         case FORMAT_PREMULTIPLIED_RGBA: { texture = sample.rgb; texture_coverage = sample.a; }
+        // An opaque volume: the geometry is the outline, so the picture's alpha is only filtering at
+        // its edge. Un-premultiply the filtered colour and cover fully.
+        case FORMAT_OPAQUE_PREMULTIPLIED_RGBA: { texture = select(vec3f(0.0), sample.rgb / sample.a, sample.a > 0.0); }
         case FORMAT_CURVES: {
             var paint = vec4f(1.0);
             if material.gradient_kind.x != 0u { paint = gradient_paint(in.texcoord); }
@@ -320,6 +325,16 @@ fn fs_main_shaded(in: VertexOut) -> @location(0) vec4f {
     }
     let radiance = motolii_surface(SurfaceIn(albedo.rgb / coverage, normal, view_dir, in.world_position.xyz, in.world_position.w, params, in.texcoord, coverage));
     return vec4f(radiance * coverage, coverage);
+}
+
+/// Depth pre-pass: the same fragments survive as in `fs_main_shaded` (only the clip plane discards
+/// there), so the shading pass at equal depth evaluates the material once per sample.
+@fragment
+fn fs_main_depth_only(in: VertexOut) -> @location(0) vec4f {
+    if clip_outside(clip.plane, in.world_position.xyz) {
+        discard;
+    }
+    return vec4f(0.0);
 }
 
 @fragment

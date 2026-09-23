@@ -692,6 +692,12 @@ impl Renderer for MeshRenderer {
             _ => unreachable!("We were called on a phase we weren't subscribed to: {phase:?}"),
         }
 
+        // Opaque meshes go twice: depth only, then the material at the surviving depth. The shaded
+        // fragment can discard (the clip plane), which turns off hidden-surface removal; without the
+        // pre-pass every overlapping surface would be shaded in full. Ties keep "later wins"
+        // (GreaterEqual, then Equal), so the result is the same.
+        let steps: &[Option<bool>] = if phase == DrawPhase::Opaque { &[Some(true), Some(false)] } else { &[None] };
+        for &prepass in steps {
         for DrawInstruction {
             draw_data,
             drawables,
@@ -745,10 +751,9 @@ impl Renderer for MeshRenderer {
                 // For the transparent phase this is done per-material below.
                 if phase != DrawPhase::Transparent {
                     let pipeline = match (phase, mesh_batch.cull_mode) {
-                        (DrawPhase::Opaque, None) => program.rp_shaded,
-                        (DrawPhase::Opaque, Some(wgpu::Face::Back)) => program.rp_shaded_cull_back,
-                        (DrawPhase::Opaque, Some(wgpu::Face::Front)) => {
-                            program.rp_shaded_cull_front
+                        (DrawPhase::Opaque, cull) => {
+                            let index = match cull { None => 0, Some(wgpu::Face::Back) => 1, Some(wgpu::Face::Front) => 2 };
+                            if prepass == Some(true) { program.rp_depth_prepass[index] } else { program.rp_shaded_at_depth[index] }
                         }
                         (DrawPhase::PickingLayer, None) => program.rp_picking_layer,
                         (DrawPhase::PickingLayer, Some(wgpu::Face::Back)) => {
@@ -822,6 +827,7 @@ impl Renderer for MeshRenderer {
                     }
                 }
             }
+        }
         }
 
         Ok(())
@@ -897,6 +903,7 @@ mod tests {
             ctx,
             smallvec![Material {
                 albedo_is_premultiplied: false,
+                albedo_is_opaque_picture: false,
                 field_anchor: false,
                 curves: None,
                 label: "opaque_material".into(),
@@ -913,6 +920,7 @@ mod tests {
             smallvec![
                 Material {
                     albedo_is_premultiplied: false,
+                    albedo_is_opaque_picture: false,
                     field_anchor: false,
                     curves: None,
                     label: "opaque_material".into(),
@@ -922,6 +930,7 @@ mod tests {
                 },
                 Material {
                     albedo_is_premultiplied: false,
+                    albedo_is_opaque_picture: false,
                     field_anchor: false,
                     curves: None,
                     label: "opaque_material".into(),

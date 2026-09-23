@@ -265,6 +265,7 @@ fn import_mesh(
 
         materials.push(Material {
             albedo_is_premultiplied: false,
+            albedo_is_opaque_picture: false,
             field_anchor: false,
             curves: None,
             label: primitive.material().name().into(),
