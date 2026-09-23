@@ -209,7 +209,7 @@ impl Inner {
 impl TextureManager2D {
     /// Samples an existing GPU-resident image in place, without allocating or copying.
     ///
-    /// The zero-copy counterpart to [`Self::copy_from_gpu_premultiplied`]. The embedder keeps
+    /// Zero-copy: the embedder keeps
     /// ownership of `source` and must not write to it while a frame that samples it is in flight,
     /// which in practice means alternating between two textures per layer.
     pub fn import_gpu_premultiplied(
@@ -254,102 +254,6 @@ impl TextureManager2D {
         inner.premultiplied_texture_keys.insert(key);
         inner.accessed_textures.insert(key);
 
-        Ok(texture)
-    }
-
-    /// Stops sampling a texture previously handed over by [`Self::import_gpu_premultiplied`].
-    ///
-    /// Call this before the embedder drops its own texture. Returns whether there was one.
-    pub fn release_imported(&self, key: u64) -> bool {
-        let mut inner = self.inner.lock();
-        let released = inner.imported_textures.remove(&key).is_some();
-        if released {
-            inner.texture_cache.remove(&key);
-            inner.premultiplied_texture_keys.remove(&key);
-            inner.accessed_textures.remove(&key);
-        }
-        released
-    }
-
-    /// Copies an existing GPU-resident image into the texture cache used by image visualizers.
-    ///
-    /// This is intended for embedders which already rendered an image on the same device.
-    /// No pixels are read back to the CPU.
-    pub fn copy_from_gpu_premultiplied(
-        &self,
-        key: u64,
-        render_ctx: &RenderContext,
-        source: &wgpu::Texture,
-    ) -> Result<GpuTexture2D, ExternalGpuTextureError> {
-        if source.dimension() != wgpu::TextureDimension::D2 {
-            return Err(ExternalGpuTextureError::Not2D);
-        }
-
-        let size = source.size();
-        if size.width == 0 || size.height == 0 || size.depth_or_array_layers != 1 {
-            return Err(ExternalGpuTextureError::InvalidSize(size));
-        }
-
-        let mut inner = self.inner.lock();
-        let texture = match inner.texture_cache.entry(key) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                let texture = entry.get();
-                if texture.width_height() != [size.width, size.height]
-                    || texture.format() != source.format()
-                {
-                    return Err(ExternalGpuTextureError::DescriptorMismatch);
-                }
-                texture.clone()
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let texture = render_ctx.gpu_resources.textures.alloc(
-                    &render_ctx.device,
-                    &TextureDesc {
-                        label: "external premultiplied image".into(),
-                        size,
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: source.format(),
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING
-                            | wgpu::TextureUsages::COPY_DST
-                            | wgpu::TextureUsages::COPY_SRC,
-                    },
-                );
-                entry
-                    .insert(
-                        GpuTexture2D::new(texture, AlphaChannelUsage::AlphaChannelInUse)
-                            .expect("external image texture is 2D"),
-                    )
-                    .clone()
-            }
-        };
-
-        let mut encoder =
-            render_ctx
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("copy external premultiplied image"),
-                });
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: source,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture.texture.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            size,
-        );
-        render_ctx.queue.submit([encoder.finish()]);
-
-        inner.premultiplied_texture_keys.insert(key);
-        inner.accessed_textures.insert(key);
         Ok(texture)
     }
 

@@ -601,20 +601,6 @@ This means, either a call to RenderContext::before_submit was omitted, or the pr
     }
 
     /// Call this at the end of a frame but before submitting command buffers (e.g. from [`crate::view_builder::ViewBuilder`])
-    /// After a queue submission inside a frame (an embedder that submits several times per frame):
-    /// staging memory is handed back for reuse, but the frame does not end — no resource-pool
-    /// collection, no in-flight throttling, no frame index change. Call [`Self::begin_frame`] once
-    /// per frame.
-    pub fn after_submit_within_frame(&mut self) {
-        self.cpu_write_gpu_read_belt.get_mut().after_submit_within_frame();
-        self.gpu_readback_belt.get_mut().after_queue_submit();
-        // `before_submit` took the frame-global encoder; the frame goes on, so it needs a new one.
-        let mut encoder = self.active_frame.before_view_builder_encoder.lock();
-        if encoder.0.is_none() {
-            *encoder = FrameGlobalCommandEncoder::new(&self.device);
-        }
-    }
-
     ///
     /// Submits the frame-global encoder, then every command buffer queued with
     /// [`Self::queue_commands`], in one submission. Returns it when there was anything to submit.
