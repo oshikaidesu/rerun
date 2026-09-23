@@ -141,7 +141,7 @@ where
     /// Unlike [`Self::alloc`] this neither creates anything nor counts towards the pool's memory
     /// statistics: the memory belongs to whoever handed the resource over. Reclamation still
     /// applies once the pool is the only owner, so a borrowed resource must be kept alive by its
-    /// importer for as long as it may be sampled — see `TextureManager2D::import_gpu_premultiplied`.
+    /// importer for as long as it may be sampled — see [`super::GpuTexturePool::import`].
     pub fn insert(&self, inner: Res, desc: &Desc) -> Arc<DynamicResource<Handle, Desc, Res>> {
         re_tracing::profile_function!();
         let mut state = self.state.write();
