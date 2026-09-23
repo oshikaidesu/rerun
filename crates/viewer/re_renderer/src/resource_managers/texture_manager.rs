@@ -176,17 +176,9 @@ struct Inner {
     /// during [`Self::begin_frame`].
     texture_cache: HashMap<u64, GpuTexture2D>,
 
-    /// Textures supplied by an embedder whose RGB channels are already multiplied by alpha.
-    premultiplied_texture_keys: HashSet<u64>,
-
     /// Draws the mip chain for [`TextureManager2D::create_with_mipmaps`]. Built on first use.
     mipmaps: Option<super::MipmapGenerator>,
 
-    /// Textures owned by an embedder and sampled in place, keyed like [`Self::texture_cache`].
-    ///
-    /// Held separately so that cache eviction never leaves the pool as sole owner: reclamation
-    /// destroys the underlying `wgpu::Texture`, which here belongs to the embedder.
-    imported_textures: HashMap<u64, GpuTexture2D>,
 
     accessed_textures: HashSet<u64>,
 }
@@ -196,72 +188,11 @@ impl Inner {
         // Drop any textures that weren't accessed in the last frame
         self.texture_cache
             .retain(|k, _| self.accessed_textures.contains(k));
-        self.premultiplied_texture_keys
-            .retain(|k| self.texture_cache.contains_key(k));
-        // Let go of imports the embedder stopped handing over. Safe to do implicitly: this only
-        // drops our reference, never the embedder's texture.
-        self.imported_textures
-            .retain(|k, _| self.texture_cache.contains_key(k));
         self.accessed_textures.clear();
     }
 }
 
 impl TextureManager2D {
-    /// Samples an existing GPU-resident image in place, without allocating or copying.
-    ///
-    /// Zero-copy: the embedder keeps
-    /// ownership of `source` and must not write to it while a frame that samples it is in flight,
-    /// which in practice means alternating between two textures per layer.
-    pub fn import_gpu_premultiplied(
-        &self,
-        key: u64,
-        render_ctx: &RenderContext,
-        source: &wgpu::Texture,
-    ) -> Result<GpuTexture2D, ExternalGpuTextureError> {
-        if source.dimension() != wgpu::TextureDimension::D2 {
-            return Err(ExternalGpuTextureError::Not2D);
-        }
-
-        let size = source.size();
-        if size.width == 0 || size.height == 0 || size.depth_or_array_layers != 1 {
-            return Err(ExternalGpuTextureError::InvalidSize(size));
-        }
-
-        let mut inner = self.inner.lock();
-
-        // Re-imported on every call rather than cached by `key`, because a double-buffered
-        // embedder alternates between two textures that share one key and one descriptor: there is
-        // nothing in a `wgpu::Texture` to tell them apart, so the only safe answer is to take
-        // whichever one was handed over now. Dropping the previous import is free (see
-        // `GpuTexturePool::import`); the cost of a repeat is one texture view.
-        let imported = render_ctx.gpu_resources.textures.import(
-            source.clone(),
-            &TextureDesc {
-                label: format!("imported premultiplied image {key:016x}").into(),
-                size,
-                mip_level_count: source.mip_level_count(),
-                sample_count: source.sample_count(),
-                dimension: wgpu::TextureDimension::D2,
-                format: source.format(),
-                usage: source.usage(),
-            },
-        );
-        let texture = GpuTexture2D::new(imported, AlphaChannelUsage::AlphaChannelInUse)
-            .expect("imported image texture is 2D");
-
-        inner.imported_textures.insert(key, texture.clone());
-        inner.texture_cache.insert(key, texture.clone());
-        inner.premultiplied_texture_keys.insert(key);
-        inner.accessed_textures.insert(key);
-
-        Ok(texture)
-    }
-
-    /// Whether the cached image identified by `key` already has premultiplied alpha.
-    pub fn is_premultiplied(&self, key: u64) -> bool {
-        self.inner.lock().premultiplied_texture_keys.contains(&key)
-    }
-
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -494,16 +425,6 @@ impl TextureManager2D {
     pub(crate) fn begin_frame(&self, _frame_index: u64) {
         self.inner.lock().begin_frame(_frame_index);
     }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ExternalGpuTextureError {
-    #[error("external GPU image must be a 2D texture")]
-    Not2D,
-    #[error("external GPU image has invalid size {0:?}")]
-    InvalidSize(wgpu::Extent3d),
-    #[error("external GPU image descriptor changed without changing its cache key")]
-    DescriptorMismatch,
 }
 
 /// Returns whether the given [`wgpu::TextureFormat`] has an alpha channel.

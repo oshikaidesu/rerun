@@ -15,7 +15,7 @@ pub use image_data_to_texture::{
     ImageDataDesc, ImageDataToTextureError, SourceImageDataFormat, transfer_image_data_to_texture,
 };
 pub use texture_manager::{
-    AlphaChannelUsage, ExternalGpuTextureError, GpuTexture2D, TextureManager2D,
+    AlphaChannelUsage, GpuTexture2D, TextureManager2D,
     TextureManager2DError,
 };
 pub use yuv_converter::{YuvMatrixCoefficients, YuvPixelLayout, YuvRange};
