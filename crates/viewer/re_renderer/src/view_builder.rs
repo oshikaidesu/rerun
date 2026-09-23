@@ -1199,6 +1199,23 @@ impl ViewBuilder {
         ctx: &RenderContext,
         clear_color: Rgba,
     ) -> Result<wgpu::CommandBuffer, PoolError> {
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(self.setup.name.clone().get()),
+            });
+        self.draw_into(ctx, clear_color, &mut encoder)?;
+        Ok(encoder.finish())
+    }
+
+    /// Motolii seam: [`Self::draw`] into the caller's encoder, so an embedder recording many
+    /// views (and passes between them) finishes one encoder per frame instead of one per view.
+    pub fn draw_into(
+        &mut self,
+        ctx: &RenderContext,
+        clear_color: Rgba,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<(), PoolError> {
         re_tracing::profile_function!();
 
         // Renderers and render pipelines are locked for the entirety of this method:
@@ -1222,11 +1239,6 @@ impl ViewBuilder {
         // Prepare the drawables for drawing!
         self.draw_phase_manager.sort_drawables(&renderers);
 
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(setup.name.clone().get()),
-            });
 
         {
             re_tracing::profile_scope!("main target pass");
@@ -1284,7 +1296,7 @@ impl ViewBuilder {
 
         if let Some(picking_processor) = &self.picking_processor {
             {
-                let mut pass = picking_processor.begin_render_pass(&setup.name, &mut encoder);
+                let mut pass = picking_processor.begin_render_pass(&setup.name, encoder);
                 // PickingProcessor has as custom frame uniform buffer.
                 //
                 // TODO(andreas): Formalize this somehow.
@@ -1303,7 +1315,7 @@ impl ViewBuilder {
                     &mut pass,
                 );
             }
-            match picking_processor.end_render_pass(&mut encoder, &pipelines) {
+            match picking_processor.end_render_pass(encoder, &pipelines) {
                 Err(PickingLayerError::ResourcePoolError(err)) => {
                     return Err(err);
                 }
@@ -1318,7 +1330,7 @@ impl ViewBuilder {
             re_tracing::profile_scope!("outlines");
             {
                 re_tracing::profile_scope!("outline mask pass");
-                let mut pass = outline_mask_processor.start_mask_render_pass(&mut encoder);
+                let mut pass = outline_mask_processor.start_mask_render_pass(encoder);
                 pass.set_bind_group(0, &setup.bind_group_0, &[]);
                 self.draw_phase_manager.draw(
                     &renderers,
@@ -1333,12 +1345,12 @@ impl ViewBuilder {
                     &mut pass,
                 );
             }
-            outline_mask_processor.compute_outlines(&pipelines, &mut encoder)?;
+            outline_mask_processor.compute_outlines(&pipelines, encoder)?;
         }
 
         if let Some(screenshot_processor) = &self.screenshot_processor {
             {
-                let mut pass = screenshot_processor.begin_render_pass(&setup.name, &mut encoder);
+                let mut pass = screenshot_processor.begin_render_pass(&setup.name, encoder);
                 pass.set_bind_group(0, &setup.bind_group_0, &[]);
                 self.draw_phase_manager.draw(
                     &renderers,
@@ -1347,7 +1359,7 @@ impl ViewBuilder {
                     &mut pass,
                 );
             }
-            match screenshot_processor.end_render_pass(&mut encoder) {
+            match screenshot_processor.end_render_pass(encoder) {
                 Ok(()) => {}
                 Err(err) => {
                     re_log::warn_once!("Failed to schedule screenshot data readback: {err}");
@@ -1355,7 +1367,7 @@ impl ViewBuilder {
             }
         }
 
-        Ok(encoder.finish())
+        Ok(())
     }
 
     /// Schedules the taking of a screenshot.
