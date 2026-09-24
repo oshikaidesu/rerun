@@ -116,6 +116,7 @@ web-sys.workspace = true
 re_log = { workspace = true, features = ["setup"] }
 
 criterion.workspace = true
+image.workspace = true
 pollster.workspace = true
 unindent.workspace = true
 

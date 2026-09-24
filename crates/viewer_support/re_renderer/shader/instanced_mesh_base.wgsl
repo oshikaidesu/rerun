@@ -34,7 +34,7 @@ struct MaterialUniformBuffer {
     texture_format: vec4u,
     // 1: evaluate the vertex field at texcoord (x, y, 0) — stroked paths keep their centreline there.
     field_at_texcoord: vec4u,
-    // FORMAT_CURVES: number of quadratic curves in `curves`, and the fill rule (1 = even-odd).
+    // FORMAT_CURVES: number of quadratic curves in the fill, and the fill rule (1 = even-odd).
     curve_count: vec4u,
     even_odd: vec4u,
     // 0: vertex colour. Otherwise the albedo texture is a ramp over t = 0..=1 along `gradient_line`
@@ -45,6 +45,12 @@ struct MaterialUniformBuffer {
     gradient_space: vec4f,
     // The texcoords spanning the picture: origin.xy, size.zw (`SurfaceIn::uv` is 0..1 across it).
     uv_frame: vec4f,
+    // FORMAT_CURVES: the curves' bounds, lo.xy and hi.xy, in texcoord units.
+    curve_bounds: vec4f,
+    // FORMAT_CURVES: bands per texcoord unit along x and y (`.xy`).
+    curve_band_scale: vec4f,
+    // FORMAT_CURVES: row bands (along y, `.x`) and column bands (along x, `.y`).
+    curve_bands: vec4u,
 };
 
 const GRADIENT_LINEAR: u32 = 1;
@@ -88,12 +94,13 @@ fn gradient_paint(p: vec2f) -> vec4f {
 @group(1) @binding(1)
 var<uniform> material: MaterialUniformBuffer;
 
-// Quadratic outlines in texcoord units, two texels per curve: (p0, p1), (p2, _). A data texture.
+// The quadratic outlines in texcoord units, bucketed into bands (`CurveBands` in mesh.rs): first
+// one header texel per band, (first texel, curve count, _, _), row bands then column bands; then
+// each band's curves, two texels each, (p0, p1), (p2, _). Column bands hold x and y swapped.
 @group(1) @binding(2)
 var curves_texture: texture_2d<f32>;
 
-fn curve_texel(i: u32) -> vec4f {
-    let width = textureDimensions(curves_texture).x;
+fn curve_texel(i: u32, width: u32) -> vec4f {
     return textureLoad(curves_texture, vec2u(i % width, i / width), 0);
 }
 
@@ -137,20 +144,51 @@ fn winding_coverage(winding: f32) -> f32 {
     return clamp(abs(winding), 0.0, 1.0);
 }
 
+// Winding of the ray from `p` towards +x over the curves of one band, summed in curve order.
+fn curve_band_winding(p: vec2f, band: u32, pixels_per_unit: f32, width: u32) -> f32 {
+    let header = curve_texel(band, width);
+    let first = u32(header.x);
+    let end = first + 2u * u32(header.y);
+    var winding = 0.0;
+    var i = first;
+    // Two curves per step so their four loads are in flight together; the sum stays in order.
+    for (; i + 2u < end; i += 4u) {
+        let a0 = curve_texel(i, width);
+        let b0 = curve_texel(i + 1u, width);
+        let a1 = curve_texel(i + 2u, width);
+        let b1 = curve_texel(i + 3u, width);
+        winding += curve_ray_coverage(a0.xy - p, a0.zw - p, b0.xy - p, pixels_per_unit);
+        winding += curve_ray_coverage(a1.xy - p, a1.zw - p, b1.xy - p, pixels_per_unit);
+    }
+    for (; i < end; i += 2u) {
+        let a = curve_texel(i, width);
+        let b = curve_texel(i + 1u, width);
+        winding += curve_ray_coverage(a.xy - p, a.zw - p, b.xy - p, pixels_per_unit);
+    }
+    return winding;
+}
+
 // Coverage of the curve fill at `p`, antialiased over one pixel (`texel` = fwidth of the texcoord).
 // Rays along x and y are averaged, so edges in both directions are smooth.
+//
+// A curve only crosses the ray along +x where its control points straddle p.y, so only the
+// curves of the row band holding p.y are visited (and none when p.y is outside the fill's bounds);
+// the ray along +y reads the column band with x and y swapped. Every skipped curve would have
+// added exactly 0, so the winding is the same as over all curves.
 fn curve_coverage(p: vec2f, texel: vec2f) -> f32 {
     let pixels_per_unit = 1.0 / max(texel, vec2f(1e-12));
+    let lo = material.curve_bounds.xy;
+    let hi = material.curve_bounds.zw;
+    let width = textureDimensions(curves_texture).x;
     var along_x = 0.0;
     var along_y = 0.0;
-    for (var i = 0u; i < material.curve_count.x; i++) {
-        let a = curve_texel(2u * i);
-        let b = curve_texel(2u * i + 1u);
-        let p1 = a.xy - p;
-        let p2 = a.zw - p;
-        let p3 = b.xy - p;
-        along_x += curve_ray_coverage(p1, p2, p3, pixels_per_unit.x);
-        along_y += curve_ray_coverage(p1.yx, p2.yx, p3.yx, pixels_per_unit.y);
+    if p.y >= lo.y && p.y < hi.y {
+        let row = min(u32((p.y - lo.y) * material.curve_band_scale.y), material.curve_bands.x - 1u);
+        along_x = curve_band_winding(p, row, pixels_per_unit.x, width);
+    }
+    if p.x >= lo.x && p.x < hi.x {
+        let column = min(u32((p.x - lo.x) * material.curve_band_scale.x), material.curve_bands.y - 1u);
+        along_y = curve_band_winding(p.yx, material.curve_bands.x + column, pixels_per_unit.y, width);
     }
     return 0.5 * (winding_coverage(along_x) + winding_coverage(along_y));
 }

@@ -218,6 +218,147 @@ pub struct CurveFill {
     pub gradient: Option<std::sync::Arc<CurveGradient>>,
 }
 
+/// A [`CurveFill`] as the fragment shader reads it: the curves bucketed into bands along each axis
+/// so a fragment only visits the curves that can cross its ray.
+///
+/// A curve contributes to the ray along +x only where its control points straddle the ray's y
+/// (`curve_ray_coverage` returns exactly 0 otherwise), so a fragment at `p` only needs the curves
+/// whose y range contains `p.y`; the same along x for the ray along +y. The fill's bounds are cut
+/// into `rows` bands of y and `columns` bands of x; a band lists, in the fill's curve order, every
+/// curve whose range touches it. The sum over a band's curves is the sum over all curves with the
+/// zero terms left out, so the coverage is the same to the bit.
+///
+/// Texel layout (`Rgba32Float`): `rows + columns` band headers `(first texel, curve count, 0, 0)`,
+/// rows first, then each band's curves as two texels each, `(p0, p1)`, `(p2, 0)`. Column bands hold
+/// their curves with x and y swapped, so the shader runs the one ray routine on `p.yx`.
+pub(crate) struct CurveBands {
+    texels: Vec<[f32; 4]>,
+    lo: glam::Vec2,
+    hi: glam::Vec2,
+    /// Bands per unit along each axis; 0 where the bounds are flat.
+    bands_per_unit: glam::Vec2,
+    rows: u32,
+    columns: u32,
+}
+
+impl CurveBands {
+    /// The band table for `curves`; empty bounds (no curves) make every fragment skip.
+    fn build(curves: &[[glam::Vec2; 3]]) -> Self {
+        // Fragments outside the band's own span can still land in it through rounding when the
+        // shader turns `(p - lo) * bands_per_unit` into a band index. That error is under
+        // `bands * 2^-22` bands; overlap the bands by well more than that.
+        const OVERLAP: f64 = 1e-4;
+        // Two bands per curve: measured flat from there (30 ellipses of ~40 curves at 512²:
+        // n/2 bands 3.8 ns/px, n 3.5, 2n 3.2, 4n 3.2); memory grows with it, so it is capped.
+        const MAX_BANDS: usize = 128;
+
+        let (lo, hi) = curves.iter().flatten().fold(
+            (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN)),
+            |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+        );
+        if curves.is_empty() {
+            return Self {
+                texels: Vec::new(),
+                lo: glam::Vec2::ZERO,
+                hi: glam::Vec2::ZERO,
+                bands_per_unit: glam::Vec2::ZERO,
+                rows: 0,
+                columns: 0,
+            };
+        }
+        let extent = (hi - lo).as_dvec2();
+        let bands = (2 * curves.len()).clamp(1, MAX_BANDS);
+        let bands_along = |axis: usize| if extent[axis] > 0.0 { bands } else { 1 };
+        let (rows, columns) = (bands_along(1), bands_along(0));
+        let bands_per_unit = glam::dvec2(
+            if extent.x > 0.0 {
+                columns as f64 / extent.x
+            } else {
+                0.0
+            },
+            if extent.y > 0.0 {
+                rows as f64 / extent.y
+            } else {
+                0.0
+            },
+        );
+
+        // (min, max) of each curve's control points along `axis`.
+        let spans = |axis: usize| -> Vec<(f64, f64)> {
+            curves
+                .iter()
+                .map(|c| {
+                    let v = [c[0][axis] as f64, c[1][axis] as f64, c[2][axis] as f64];
+                    (v[0].min(v[1]).min(v[2]), v[0].max(v[1]).max(v[2]))
+                })
+                .collect()
+        };
+        let members = |axis: usize, count: usize| -> Vec<Vec<usize>> {
+            let spans = spans(axis);
+            let step = if count > 1 {
+                extent[axis] / count as f64
+            } else {
+                extent[axis]
+            };
+            let slack = step * OVERLAP;
+            (0..count)
+                .map(|band| {
+                    let start = lo[axis] as f64 + band as f64 * step - slack;
+                    let end = lo[axis] as f64 + (band + 1) as f64 * step + slack;
+                    spans
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (min, max))| *min <= end && *max >= start)
+                        .map(|(i, _)| i)
+                        .collect()
+                })
+                .collect()
+        };
+        let row_members = members(1, rows);
+        let column_members = members(0, columns);
+
+        let mut texels = Vec::with_capacity(
+            rows + columns
+                + 2 * (row_members
+                    .iter()
+                    .chain(&column_members)
+                    .map(Vec::len)
+                    .sum::<usize>()),
+        );
+        texels.resize(rows + columns, [0.0; 4]);
+        for (band, (list, swap)) in row_members
+            .iter()
+            .map(|m| (m, false))
+            .chain(column_members.iter().map(|m| (m, true)))
+            .enumerate()
+        {
+            texels[band] = [texels.len() as f32, list.len() as f32, 0.0, 0.0];
+            for &i in list {
+                let [a, b, c] = curves[i];
+                let (a, b, c) = if swap {
+                    (
+                        glam::vec2(a.y, a.x),
+                        glam::vec2(b.y, b.x),
+                        glam::vec2(c.y, c.x),
+                    )
+                } else {
+                    (a, b, c)
+                };
+                texels.push([a.x, a.y, b.x, b.y]);
+                texels.push([c.x, c.y, 0.0, 0.0]);
+            }
+        }
+        Self {
+            texels,
+            lo,
+            hi,
+            bands_per_unit: bands_per_unit.as_vec2(),
+            rows: rows as u32,
+            columns: columns as u32,
+        }
+    }
+}
+
 /// Where along a gradient a point lies (`t` in 0..=1), evaluated per fragment; the colour at `t`
 /// comes from `ramp`, which the embedder samples from its own colour model.
 #[derive(Clone, Debug, PartialEq)]
@@ -314,7 +455,13 @@ pub(crate) mod gpu_data {
         gradient_line: wgpu_buffer_types::Vec4,
         gradient_space: wgpu_buffer_types::Vec4,
         uv_frame: wgpu_buffer_types::Vec4,
-        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 9],
+        /// The curves' bounds: `lo.xy`, `hi.xy`.
+        curve_bounds: wgpu_buffer_types::Vec4,
+        /// Bands per unit along x and y, in `xy`.
+        curve_band_scale: wgpu_buffer_types::Vec4,
+        /// Row bands (along y) and column bands (along x), see `CurveBands`.
+        curve_bands: wgpu_buffer_types::UVec2RowPadded,
+        end_padding: [wgpu_buffer_types::PaddingRow; 16 - 12],
     }
 
     impl MaterialUniformBuffer {
@@ -323,15 +470,18 @@ pub(crate) mod gpu_data {
             texture_format: TextureFormat,
             field_at_texcoord: bool,
             texcoord_frame: Option<(glam::Vec2, glam::Vec2)>,
-            curves: Option<&super::CurveFill>,
+            curves: Option<(&super::CurveFill, &super::CurveBands)>,
         ) -> Self {
-            let gradient = curves.and_then(|fill| fill.gradient.as_ref());
+            let gradient = curves.and_then(|(fill, _)| fill.gradient.as_ref());
+            let bands = curves.map(|(_, bands)| bands);
             Self {
                 albedo_factor,
                 texture_format: (texture_format as u32).into(),
                 field_at_texcoord: u32::from(field_at_texcoord).into(),
-                curve_count: curves.map_or(0, |fill| fill.curves.len() as u32).into(),
-                even_odd: u32::from(curves.is_some_and(|fill| fill.even_odd)).into(),
+                curve_count: curves
+                    .map_or(0, |(fill, _)| fill.curves.len() as u32)
+                    .into(),
+                even_odd: u32::from(curves.is_some_and(|(fill, _)| fill.even_odd)).into(),
                 gradient_kind: gradient.map_or(0, |g| g.kind as u32).into(),
                 gradient_line: gradient
                     .map_or(glam::Vec4::ZERO, |g| {
@@ -352,6 +502,19 @@ pub(crate) mod gpu_data {
                     .map_or(glam::vec4(0.0, 0.0, 1.0, 1.0), |(origin, size)| {
                         glam::vec4(origin.x, origin.y, size.x, size.y)
                     })
+                    .into(),
+                curve_bounds: bands
+                    .map_or(glam::Vec4::ZERO, |b| {
+                        glam::vec4(b.lo.x, b.lo.y, b.hi.x, b.hi.y)
+                    })
+                    .into(),
+                curve_band_scale: bands
+                    .map_or(glam::Vec4::ZERO, |b| {
+                        b.bands_per_unit.extend(0.0).extend(0.0)
+                    })
+                    .into(),
+                curve_bands: bands
+                    .map_or(glam::UVec2::ZERO, |b| glam::uvec2(b.rows, b.columns))
                     .into(),
                 end_padding: Default::default(),
             }
@@ -440,10 +603,20 @@ impl GpuMesh {
         };
 
         let materials = {
+            let curve_bands: Vec<Option<CurveBands>> = data
+                .materials
+                .iter()
+                .map(|material| {
+                    material
+                        .curves
+                        .as_deref()
+                        .map(|fill| CurveBands::build(&fill.curves))
+                })
+                .collect();
             let uniform_buffer_bindings = create_and_fill_uniform_buffer_batch(
                 ctx,
                 format!("{} - material uniforms", data.label).into(),
-                data.materials.iter().map(|material| {
+                std::iter::zip(&data.materials, &curve_bands).map(|(material, bands)| {
                     gpu_data::MaterialUniformBuffer::new(
                         material.albedo_factor,
                         if material.curves.is_some() {
@@ -459,7 +632,7 @@ impl GpuMesh {
                         },
                         material.field_at_texcoord,
                         material.texcoord_frame,
-                        material.curves.as_deref(),
+                        material.curves.as_deref().zip(bands.as_ref()),
                     )
                 }),
             );
@@ -469,19 +642,15 @@ impl GpuMesh {
             // The bind group layout must be in sync with the mesh renderer.
             let mesh_bind_group_layout = ctx.renderer::<MeshRenderer>()?.bind_group_layout;
 
-            for (material, uniform_buffer_binding) in
-                std::iter::zip(&data.materials, uniform_buffer_bindings)
-            {
-                // A data texture, two texels per curve, as other renderers keep per-element data.
-                let curves = match &material.curves {
-                    Some(fill) if !fill.curves.is_empty() => {
-                        let data: Vec<[f32; 4]> = fill
-                            .curves
-                            .iter()
-                            .flat_map(|[a, b, c]| [[a.x, a.y, b.x, b.y], [c.x, c.y, 0.0, 0.0]])
-                            .collect();
+            for ((material, uniform_buffer_binding), bands) in std::iter::zip(
+                std::iter::zip(&data.materials, uniform_buffer_bindings),
+                &curve_bands,
+            ) {
+                // A data texture (see `CurveBands`), as other renderers keep per-element data.
+                let curves = match bands {
+                    Some(bands) if !bands.texels.is_empty() => {
                         let mut source = crate::DataTextureSource::<[f32; 4]>::new(ctx);
-                        if let Err(err) = source.extend_from_slice(&data) {
+                        if let Err(err) = source.extend_from_slice(&bands.texels) {
                             re_log::error_once!(
                                 "Failed to write the curves of {}: {err}",
                                 material.label
@@ -540,5 +709,139 @@ impl GpuMesh {
             materials,
             bbox: data.bbox,
         })
+    }
+}
+
+#[cfg(test)]
+mod curve_band_tests {
+    use super::CurveBands;
+
+    fn curve(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> [glam::Vec2; 3] {
+        [
+            glam::vec2(a.0, a.1),
+            glam::vec2(b.0, b.1),
+            glam::vec2(c.0, c.1),
+        ]
+    }
+
+    /// The curves of band `index`, unswizzled, as (curve, is_column_band).
+    fn band(bands: &CurveBands, index: usize) -> Vec<[glam::Vec2; 3]> {
+        let header = bands.texels[index];
+        let (first, count) = (header[0] as usize, header[1] as usize);
+        (0..count)
+            .map(|i| {
+                let a = bands.texels[first + 2 * i];
+                let b = bands.texels[first + 2 * i + 1];
+                [
+                    glam::vec2(a[0], a[1]),
+                    glam::vec2(a[2], a[3]),
+                    glam::vec2(b[0], b[1]),
+                ]
+            })
+            .collect()
+    }
+
+    /// Every curve whose y range holds a sample of the band is in that band, in the fill's order,
+    /// and column bands carry the same curves with x and y swapped.
+    #[test]
+    fn bands_hold_every_curve_that_can_cross_a_ray_from_them() {
+        // 12 curves around an ellipse-ish outline: two bands per curve along each axis.
+        let n = 12;
+        let curves: Vec<[glam::Vec2; 3]> = (0..n)
+            .map(|i| {
+                let at = |k: usize| {
+                    let t = k as f32 / n as f32 * std::f32::consts::TAU;
+                    glam::vec2(100.0 + 80.0 * t.cos(), 50.0 + 30.0 * t.sin())
+                };
+                let (a, c) = (at(i), at(i + 1));
+                [a, (a + c) * 0.5 + glam::vec2(1.0, -1.0), c]
+            })
+            .collect();
+        let bands = CurveBands::build(&curves);
+        assert_eq!((bands.rows, bands.columns), (24, 24));
+        assert_eq!(bands.lo, glam::vec2(20.0, 20.0));
+        assert!(bands.hi.x > 179.0 && bands.hi.y > 79.0);
+
+        let (rows, columns) = (bands.rows as usize, bands.columns as usize);
+        let step = (bands.hi - bands.lo) / glam::vec2(columns as f32, rows as f32);
+        for row in 0..rows {
+            let listed = band(&bands, row);
+            let indices: Vec<usize> = listed
+                .iter()
+                .map(|c| curves.iter().position(|d| d == c).expect("a fill curve"))
+                .collect();
+            assert!(
+                indices.windows(2).all(|w| w[0] < w[1]),
+                "fill order kept: {indices:?}"
+            );
+            for sample in 0..50 {
+                let y = bands.lo.y + step.y * (row as f32 + sample as f32 / 49.0);
+                for (i, c) in curves.iter().enumerate() {
+                    let (min, max) = (
+                        c[0].y.min(c[1].y).min(c[2].y),
+                        c[0].y.max(c[1].y).max(c[2].y),
+                    );
+                    if min <= y && y < max {
+                        assert!(indices.contains(&i), "curve {i} spans y = {y} of row {row}");
+                    }
+                }
+            }
+        }
+        for column in 0..columns {
+            let listed = band(&bands, rows + column);
+            for c in &listed {
+                let unswapped = [
+                    glam::vec2(c[0].y, c[0].x),
+                    glam::vec2(c[1].y, c[1].x),
+                    glam::vec2(c[2].y, c[2].x),
+                ];
+                assert!(
+                    curves.contains(&unswapped),
+                    "column bands are swizzled fill curves"
+                );
+            }
+            for sample in 0..50 {
+                let x = bands.lo.x + step.x * (column as f32 + sample as f32 / 49.0);
+                for c in &curves {
+                    let (min, max) = (
+                        c[0].x.min(c[1].x).min(c[2].x),
+                        c[0].x.max(c[1].x).max(c[2].x),
+                    );
+                    if min <= x && x < max {
+                        let swapped = [
+                            glam::vec2(c[0].y, c[0].x),
+                            glam::vec2(c[1].y, c[1].x),
+                            glam::vec2(c[2].y, c[2].x),
+                        ];
+                        assert!(listed.contains(&swapped), "column {column} at x = {x}");
+                    }
+                }
+            }
+        }
+        // Bands are a real cut, not everything everywhere.
+        assert!((0..rows + columns).all(|b| band(&bands, b).len() < n));
+    }
+
+    /// Flat bounds along an axis make one band there; no curves make no bands and empty bounds.
+    #[test]
+    fn degenerate_fills_stay_well_formed() {
+        let flat = CurveBands::build(&[
+            curve((0.0, 5.0), (5.0, 5.0), (10.0, 5.0)),
+            curve((10.0, 5.0), (5.0, 5.0), (0.0, 5.0)),
+        ]);
+        assert_eq!((flat.rows, flat.columns), (1, 4));
+        assert_eq!(flat.bands_per_unit.y, 0.0);
+        assert_eq!(flat.lo.y, flat.hi.y);
+        assert_eq!(band(&flat, 0).len(), 2);
+        assert_eq!(
+            band(&flat, 1).len(),
+            2,
+            "every column of a flat fill sees both curves"
+        );
+
+        let none = CurveBands::build(&[]);
+        assert_eq!((none.rows, none.columns), (0, 0));
+        assert!(none.texels.is_empty());
+        assert_eq!(none.lo, none.hi);
     }
 }
