@@ -43,6 +43,10 @@ pub struct SurfaceProgramDesc {
     pub surface: Option<String>,
     /// WGSL defining `fn program_surface(in: SurfaceIn) -> vec3f` for rectangles.
     pub rectangle_surface: Option<String>,
+    /// Shade once per pixel (centroid) even where the context shades per sample: for surfaces whose
+    /// colour does not vary inside a pixel (unlit pictures, analytic curve coverage). MSAA still
+    /// resolves their geometric edges from coverage.
+    pub pixel_rate: bool,
 }
 
 pub const DEFAULT_FIELD: &str =
@@ -180,7 +184,7 @@ impl SurfaceProgram {
             &ShaderModuleDesc {
                 label: format!("SurfaceProgram::rectangle::{}", program.desc.label).into(),
                 source: path,
-                extra_workaround_replacements: surface_sampling_replacements(ctx),
+                extra_workaround_replacements: surface_sampling_replacements(ctx, program.desc.pixel_rate),
             },
         );
         // Every phase takes the variant's vertex stage — that is where the field moves the grid —
@@ -223,7 +227,7 @@ impl SurfaceProgram {
             &ShaderModuleDesc {
                 label: Label::from(format!("SurfaceProgram::{}", desc.label)),
                 source: path,
-                extra_workaround_replacements: surface_sampling_replacements(ctx),
+                extra_workaround_replacements: surface_sampling_replacements(ctx, desc.pixel_rate),
             },
         );
         let render_pipelines = &ctx.gpu_resources.render_pipelines;
@@ -386,10 +390,11 @@ impl SurfaceProgram {
 pub type MeshProgram = SurfaceProgram;
 pub type MeshProgramDesc = SurfaceProgramDesc;
 
-fn surface_sampling_replacements(ctx: &RenderContext) -> Vec<(String, String)> {
+fn surface_sampling_replacements(ctx: &RenderContext, pixel_rate: bool) -> Vec<(String, String)> {
     let mut replacements = Vec::new();
     let full = ctx.device_caps().tier != crate::device_caps::DeviceCapabilityTier::Limited;
     if !full
+        || pixel_rate
         || ctx.render_config().msaa_mode == crate::MsaaMode::Off
         || ctx.render_config().surface_sampling != crate::SurfaceSampling::Sample
     {
