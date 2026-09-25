@@ -82,6 +82,17 @@ impl CpuModel {
             })
     }
 
+    /// Whether every triangle is flat-shaded (its three vertex normals agree): a cut stone, not a
+    /// smooth body. Inside such a triangle the shading varies only with the view, not the normal.
+    pub fn is_faceted(&self) -> bool {
+        self.meshes.values().all(|mesh| {
+            mesh.triangle_indices.iter().all(|t| {
+                let n = |i: u32| mesh.vertex_normals.get(i as usize).copied().unwrap_or(glam::Vec3::ZERO);
+                n(t.x).abs_diff_eq(n(t.y), 1e-3) && n(t.y).abs_diff_eq(n(t.z), 1e-3)
+            })
+        })
+    }
+
     /// Overrides the albedo factor on all materials of all meshes in the model.
     pub fn override_albedo_factor(&mut self, albedo_factor: crate::Rgba) {
         for (_key, mesh) in &mut self.meshes {
