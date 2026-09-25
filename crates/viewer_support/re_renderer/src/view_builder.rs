@@ -399,16 +399,15 @@ pub struct ViewPickingConfiguration {
 impl ViewBuilder {
     /// Color format used for the main target of the view builder.
     ///
-    /// Eventually we'll want to make this an HDR format and apply tonemapping during composite.
-    /// However, note that it is easy to run into subtle MSAA quality issues then:
-    /// Applying MSAA resolve before tonemapping is problematic as it means we're doing msaa in linear.
-    /// This is especially problematic at bright/dark edges where we may loose "smoothness"!
-    /// For a nice illustration see [this blog post by MRP](https://therealmjp.github.io/posts/msaa-overview/)
-    /// We either would need to keep the MSAA target and tonemap it, or
-    /// apply a manual resolve where we inverse-tonemap non-fully-covered pixel before averaging.
-    /// (an optimized variant of this is described [by AMD here](https://gpuopen.com/learn/optimized-reversible-tonemapper-for-resolve/))
-    /// In any case, this gets us onto a potentially much costlier rendering path, especially for tiling GPUs.
-    pub const MAIN_TARGET_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+    /// Scene-linear half float: surfaces may write radiance above 1 (highlights, emission), and the
+    /// embedder or [`Self::composite`] maps it to the display. Read and written as linear, like the
+    /// sRGB format it replaced.
+    ///
+    /// MSAA resolves in linear, so a very bright sample dominates its pixel at bright/dark edges
+    /// (see [this blog post by MRP](https://therealmjp.github.io/posts/msaa-overview/)); a manual resolve that
+    /// inverse-tonemaps before averaging ([AMD](https://gpuopen.com/learn/optimized-reversible-tonemapper-for-resolve/))
+    /// would soften them, at the cost of a custom resolve.
+    pub const MAIN_TARGET_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
     /// Use this color state when targeting the main target with alpha-to-coverage.
     ///

@@ -67,7 +67,7 @@ fn main_target_reflects_the_view_that_was_drawn() {
         assert_eq!(
             main_target.texture.format(),
             ViewBuilder::MAIN_TARGET_COLOR_FORMAT,
-            "main_target() must stay sRGB-tagged -- that's the whole point of the seam"
+            "main_target() is in the view's main target format"
         );
     }
 
